@@ -1,14 +1,16 @@
 # PIC18_HVProgrammer
 A simple, Arduino based PIC family High Voltage Programmer using MicroChip ICSP serial programming to help erase, read, or flash programmings to PIC controllers in High Voltage Programming (HVP) mode. 
 
-_This only applies to PIC18(L)F2XK22/4XK22 for now_
+_This only applies to PIC18(L)F2XK22/4XK22 for now..._
 
 **Helpful Links:**
 
 ICSP Programming Guide for PIC18(L)F2XK22/4XK22 Family
+
 https://ww1.microchip.com/downloads/en/DeviceDoc/41398A.pdf
 
 PIC18(L)F2XK22/4XK22 Datasheet
+
 insert here
 
 **Hardware**: Arduino Uno, PC, target device (PIC18(L)F2XK22/4XK22)
