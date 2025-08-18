@@ -12,10 +12,14 @@
 #define  COREINSTR_CMD       0x00      // Core instruction 4 bit command (bin 0000)
 
 // ------------------- Pin mappings ---------------------
-#define  PIN_VDD      1     // PIC18 power supply
-#define  PIN_MCLR     2     // Data direction register for DATA port
-#define  PIN_DATA     3     // PGD = Data = RB6 on PIC
-#define  PIN_CLOCK    4     // PGC = Clk = RB7 on PIC
+#define  PIN_VDD      2     // PIC18 power supply
+#define  PIN_MCLR     3     // Data direction register for DATA port
+#define  PIN_DATA     4     // PGD = Data = RB6 on PIC
+#define  PIN_CLOCK    5     // PGC = Clk = RB7 on PIC
+
+#ifndef PIN_VDD_EN
+#define PIN_VDD_EN    -1
+#endif
 
 // All delays are in microseconds.
 #define DELAY_SETTLE 50 // Delay for lines to settle for reset
@@ -29,6 +33,12 @@
 // Quick calls to write clock HIGH or LOW with built-in delay
 static inline void setClkHigh() { digitalWrite(PIN_CLOCK, HIGH); delayMicroseconds(DELAY_TDLY1); }
 static inline void setClkLow() { digitalWrite(PIN_CLOCK, LOW);  delayMicroseconds(DELAY_TDLY1);  }
+
+static inline void setVdd(bool on) {
+#if PIN_VDD_EN >= 0
+  digitalWrite(PIN_VDD_EN, on ? HIGH : LOW);
+#endif
+}
 
 //Create and send 4 bit command
 //takes in a byte command (i.e 0x00)
@@ -198,8 +208,17 @@ void printHex8(unsigned long word) {
     printHex4((unsigned int)word);
 }
 
-// declarations
-int input=0;
+void printMenu() {
+  Serial.println("Enter one of the following values to execute a programming sequence:");
+  Serial.println("1 - Bulk Erase");
+  Serial.println("2 - Read Configuration Bits");
+  Serial.println("3 - Enter Program Mode");
+  Serial.println("4 - Exit Program Mode");
+  Serial.println();
+}
+
+// global declarations
+//volatile int input=0;
 
 
 // only runs once
@@ -211,19 +230,19 @@ void setup() {
       ;  // wait for serial port to connect. Needed for native USB port only
     }
 
-  Serial.println("\n");
-  Serial.println("Enter one of the following values to execute a programming sequence");
-  Serial.println("1 - Bulk Erase");
-  Serial.println("2 - Read Configuration Bits");
-  Serial.println("3 - TBD");
-  Serial.println("4 - TBD");
-  Serial.println("\n");
+  // Hold the PIC in the powered down/reset state until we are ready for it.
+  digitalWrite(PIN_MCLR, LOW);
+  digitalWrite(PIN_VDD, LOW);
 
-  // Set up control lines initially as outputs
+  // Set up control lines
+  // Clock and data are floating until the first PIC command.
+  pinMode(PIN_CLOCK, INPUT);
+  pinMode(PIN_DATA, INPUT);
   pinMode(PIN_VDD, OUTPUT);
   pinMode(PIN_MCLR, OUTPUT);
-  pinMode(PIN_DATA, OUTPUT);
-  pinMode(PIN_CLOCK, OUTPUT);
+
+  printMenu();
+
 }
 
   //Main loop looks for serial input from host 
@@ -235,36 +254,34 @@ void loop() {
 
   if (Serial.available() > 0) {
 
-    // read the incoming byte, returns ASCII value
-    input = Serial.read();
-
-    // execute certain sequences based on input (looking for 1, 2, 3, or 4)
-    // 1, 2, 3, or 4 = ASCII value of 49-51
+    // read the incoming serial input
+    int input = Serial.read();
+    
+    // execute certain sequences based on input
     // check if input is in range
-    if (input >= 49 && input <= 51) {
+    if (input >= '1' && input <= '4') {
+      Serial.print("You entered: ");
+      Serial.print(input - '0');
+      Serial.println("\n");
+      delay(50);  // give time to flush to serial
       switch (input) {
 
         // Check if Bulk Erase is selected
-        case 49:
-          Serial.println("You entered: 1");
-          Serial.println("Executing bulk erase program sequence");
-          Serial.println("Entering program mode");
+        case '1':
+          Serial.println(" === Bulk Erase === ");
+          Serial.println("Entering program mode...");
           enterProgramMode();
           // Todo: Add bulk erase commands and sequence
-          Serial.println("Eraseing data");
+          Serial.println("Erasing data...");
+          Serial.println("Exiting program mode...");
           exitProgramMode();
-          Serial.println("Action(s) completed. Returning to program options.");
-          Serial.println("\n");
           break;
         
         // Check if configuration bits read operation is selected
-        case 50:
-          Serial.println("You entered: 2");
-          Serial.println("Executing configuration bit data read");
-
+        case '2':
+          Serial.println(" === Read Config Bits === ");
           Serial.println("Entering program mode...");
           enterProgramMode();
-
           Serial.println("Reading configuration bits...");
           size_t count = readConfigBits(config);  // Read configuration memory store in config[], retuns num bytes read
 
@@ -294,32 +311,30 @@ void loop() {
           }
           Serial.println("Exiting program mode...");
           exitProgramMode();
-          Serial.println("Action(s) completed. Returning to program options.");
-          Serial.println("\n");
           break; 
-        case 51:
-          Serial.println("You entered: 3");
-          Serial.println("Todo..."); 
-          Serial.println("Action(s) completed. Returning to program options.");
-          Serial.println("\n");
+
+        case '3':
+          Serial.println(" === Test: Enter Program Mode === ");
+          Serial.println("Testing..."); 
+          delay(50);  // give time to flush to serial
+          //enterProgramMode();
           break;
-        case 52:
-          Serial.println("You entered: 4");
-          Serial.println("Todo...");
-          Serial.println("Action(s) completed. Returning to program options.");
-          Serial.println("\n");
+
+        case '4':
+          Serial.println(" === Test: Exit Program Mode === ");
+          Serial.println("Testing..."); 
+          delay(50);  // give time to flush to serial
+          //exitProgramMode();
           break;
-      } 
+      }
+      Serial.println("Action(s) completed. Enter new command.");
+      Serial.println("\n");
     }
     else {
         Serial.println("Not a valid input. Try Again.");
         Serial.println("\n");
+        printMenu();
     }
-    Serial.println("Enter one of the following values to execute a programming sequence");
-    Serial.println("1 - Bulk Erase");
-    Serial.println("2 - Read Configuration Bits");
-    Serial.println("3 - TBD");
-    Serial.println("4 - TBD");
-    Serial.println("\n");
+    
   }
 }
