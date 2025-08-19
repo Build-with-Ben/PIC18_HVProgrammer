@@ -8,7 +8,7 @@
 
 // ------------------- 4-bit Commands -------------------
 #define  TBLWRITE_CMD        0x0C      // Table Write 4 bit command (bin 1100)
-#define  TBLREAD_PI_CMD      0x08      // Table Read Post Increment 4 bit command(bin 1001)
+#define  TBLREAD_PI_CMD      0x09      // Table Read Post Increment 4 bit command(bin 1001)
 #define  COREINSTR_CMD       0x00      // Core instruction 4 bit command (bin 0000)
 
 // ------------------- Pin mappings ---------------------
@@ -25,8 +25,8 @@
 #define DELAY_SETTLE 50 // Delay for lines to settle for reset
 #define DELAY_TPPDP 5 // Hold time after raising MCLR
 #define DELAY_THLD0 5 // Input Data Hold Time from PGC (P4)
-#define DELAY_TDLY1 1 // Delay Between 4-Bit Command and Command Operand
-#define DELAY_TDLY2 1 // Delay Between Last PGC falling edge of Command Byte to First PGC (raising) of Read of Data Word
+#define DELAY_TDLY1 5 // Delay Between 4-Bit Command and Command Operand
+#define DELAY_TDLY2 5 // Delay Between Last PGC falling edge of Command Byte to First PGC (raising) of Read of Data Word
 
 //-------------- Helper Functions ------------------------------
 
@@ -48,19 +48,13 @@ void send4Cmd(uint8_t  cmd){
     //Loop through 4 times by setting CLOCK HIGH and then
     //writng DATA (LOW or HIGH) based on cmd arg
     //Finally, latch DATA by writing CLOCK LOW
-    for (uint8_t bit = 0; bit < 4; ++bit) {
-        setClkHigh();
-        //Check if the least significant bit (LSB) of cmd is 1.
-        //If so, send a HIGH signal on the data line; otherwise, send LOW.
-        if (cmd & 1)
-            digitalWrite(PIN_DATA, HIGH); 
-        else
-            digitalWrite(PIN_DATA, LOW);
-        delayMicroseconds(DELAY_TDLY1); // delay needed between writes
-        setClkLow();
-        cmd >>= 1;
-        bit++;
-    }
+    for (uint8_t i = 0; i < 4; ++i) {
+    setClkHigh();
+    digitalWrite(PIN_DATA, (cmd & 1) ? HIGH : LOW); // LSB first
+    delayMicroseconds(DELAY_TDLY1);
+    setClkLow();
+    cmd >>= 1;
+  }
 }
 
 //Create and send 16 bit payload
@@ -71,19 +65,13 @@ void send16Payload(uint16_t payload){
     //Loop through 4 times by setting CLOCK HIGH and then
     //writng DATA (LOW or HIGH) based on cmd arg
     //Finally, latch DATA by writing CLOCK LOW
-    for (uint8_t bit = 0; bit < 16; ++bit) {
-        setClkHigh();
-        //Check if the least significant bit (LSB) of cmd is 1.
-        //If so, send a HIGH signal on the data line; otherwise, send LOW.
-        if (payload & 1)
-            digitalWrite(PIN_DATA, HIGH); 
-        else
-            digitalWrite(PIN_DATA, LOW);
-        delayMicroseconds(DELAY_TDLY1); // delay needed between writes
-        setClkLow();
-        payload >>= 1;
-        bit++;
-    }
+    for (uint8_t i = 0; i < 16; ++i) {
+    setClkHigh();
+    digitalWrite(PIN_DATA, (payload & 1) ? HIGH : LOW); // LSB first
+    delayMicroseconds(DELAY_TDLY1);
+    setClkLow();
+    payload >>= 1;
+  }
 }
 
 //Sends Core instruction (0b0000) 4 bit command plus 16 bit payload arg (data)
@@ -100,20 +88,49 @@ void sendCoreInstr(uint16_t data){
 // This function sets TBLPTR (U:H:L) to a 24-bit (3 byte) 
 // address via input arg 'addr' 
 static void setTBLPTR(uint32_t addr) {
-  uint8_t U = (addr >> 16) & 0xFF; // takes first byte of add and applies to U
-  uint8_t H = (addr >>  8) & 0xFF; // takes second byte of add and applies to H
-  uint8_t L = (addr >>  0) & 0xFF; // takes third byte of add and applies to L
 
+  Serial.print("Where ");
+
+  uint8_t U = (addr >> 16) & 0xFF; // takes first byte of add and applies to U
+  Serial.print("U = 0x");
+  Serial.print(U, HEX);
+
+  uint8_t H = (addr >>  8) & 0xFF; // takes second byte of add and applies to H
+  Serial.print(", H = 0x");
+  Serial.print(H, HEX);
+
+  uint8_t L = (addr >>  0) & 0xFF; // takes third byte of add and applies to L
+  Serial.print(", and L = 0x");
+  Serial.println(L, HEX);
+
+  Serial.print("Core Instruction (0b0000): MOVWF U 0x");
+  Serial.println(0x0E00 | U, HEX);
   sendCoreInstr(0x0E00 | U);  // Core instruction MOVLW U and Bitwise OR 0E and U 
+
+  Serial.print("Core Instruction (0b0000): MOVLW U 0x");
+  Serial.println(0x6EF8, HEX);
   sendCoreInstr(0x6EF8);      // Core instruction MOVWF TBLPTRU - Move to TBLPRTU
+
+  Serial.print("Core Instruction (0b0000): MOVWF H 0x");
+  Serial.println(0x0E00 | H, HEX);
   sendCoreInstr(0x0E00 | H);  // Core instruction MOVLW H and Bitwise OR 0E and H 
+
+  Serial.print("Core Instruction (0b0000): MOVLW H 0x");
+  Serial.println(0x6EF7, HEX);
   sendCoreInstr(0x6EF7);      // Core instruction MOVWF TBLPTRH - Move to TBLPRTH
+
+  Serial.print("Core Instruction (0b0000): MOVWF L 0x");
+  Serial.println(0x0E00 | L, HEX);
   sendCoreInstr(0x0E00 | L);  // Core instruction MOVLW L and Bitwise OR 0E and L 
+
+  Serial.print("Core Instruction (0b0000): MOVLW L 0x");
+  Serial.println(0x6EF6, HEX);
   sendCoreInstr(0x6EF6);      // Core instruction MOVWF TBLPTRL - Move to TBLPRTL
 }
 
 // Table Read, post-increment: returns 1 byte at TBLPTR then TBLPTR++
 static uint8_t tblReadPI() {
+  //Serial.println("Table Read - Post Increment (0b1001): TBLRD *+");
   send4Cmd(TBLREAD_PI_CMD);
 
   // First 2 bytes (8 clock cycles) = operand (0x00); keep PGD low as output
@@ -132,19 +149,35 @@ static uint8_t tblReadPI() {
   uint8_t b = 0;
   for (uint8_t i = 0; i < 8; ++i) { 
     setClkHigh();
-    if (digitalRead(PIN_DATA)) b |= (1u << i);
+    if (digitalRead(PIN_DATA)){
+      Serial.print("Debug: Byte ");
+      Serial.println(i);
+      Serial.print("Debug: PIN DATA Value (BIN) = 0b");
+      Serial.println(b |= (1u << i), BIN);
+      Serial.print("Debug: PIN DATA Value (HEX) = 0x");
+      Serial.println(b |= (1u << i), HEX);
+      Serial.print("Debug: PIN DATA Value (DEC) = ");
+      Serial.println(b |= (1u << i), DEC);
+      b |= (1u << i);
+    }
     setClkLow();
   }
   return b;
 }
 
+int i;
+
 // Read the 14 configuration bytes at 0x300000..0x30000D into 'out'.
 // Returns number of bytes read.
-size_t readConfigBits(uint8_t* out) {
-  if (!out) return 0; // check if pointer is NULL, return zero if yes
+size_t readConfigBits(uint8_t* bits) {
+  if (!bits) return 0; // check if pointer is NULL, return zero if yes
+  Serial.print("Starting at Address 0x");
+  Serial.println(CONFIG_ADDR, HEX);
   setTBLPTR(CONFIG_ADDR);
-  for (size_t i = 0; i < CONFIG_BYTES_TO_READ; ++i) // do this 14 times
-    out[i] = tblReadPI();
+  for (size_t i = 0; i < CONFIG_BYTES_TO_READ; ++i){ // do this 14 times
+    bits[i] = tblReadPI();
+    //Serial.println(bits[i]);
+  }
   return CONFIG_BYTES_TO_READ;
 }
 
@@ -162,7 +195,7 @@ void enterProgramMode() {
   digitalWrite(PIN_CLOCK, LOW);
 
   // Wait for the lines to settle.
-  delayMicroseconds(DELAY_SETTLE);
+  delay(10);
 
   // Switch DATA and CLOCK into outputs.
   pinMode(PIN_DATA, OUTPUT);
@@ -170,9 +203,9 @@ void enterProgramMode() {
 
   // Raise MCLR, then VDD.
   digitalWrite(PIN_MCLR, HIGH);
-  delayMicroseconds(DELAY_TPPDP);
+  delay(10);
   digitalWrite(PIN_VDD, HIGH);
-  delayMicroseconds(DELAY_THLD0);
+  delay(10);
 }
 
 void exitProgramMode() {
@@ -274,7 +307,7 @@ void loop() {
           // Todo: Add bulk erase commands and sequence
           Serial.println("Erasing data...");
           Serial.println("Exiting program mode...");
-          exitProgramMode();
+          //exitProgramMode();
           break;
         
         // Check if configuration bits read operation is selected
@@ -285,6 +318,8 @@ void loop() {
           Serial.println("Reading configuration bits...");
           size_t count = readConfigBits(config);  // Read configuration memory store in config[], retuns num bytes read
 
+          Serial.print("Number of bytes read: ");
+          Serial.println(count);
           // Check if read succeeded
           if (count == CONFIG_BYTES_TO_READ) {
               Serial.println("Config bytes read successfully:");
