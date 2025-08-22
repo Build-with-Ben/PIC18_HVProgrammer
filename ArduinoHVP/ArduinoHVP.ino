@@ -1,10 +1,10 @@
 // ------------------- Desired addresses ----------------
-#define  CONFIG_ADDR          0x300000   // CONFIG register addresses 0x300000..0x30000D
+#define  CONFIG_ADDR          0x300006   // CONFIG register addresses 0x300000..0x30000D
 #define  BULK_ERASE_ADDR1     0x3C0005   // Bulk erase is broken up in two registers
 #define  BULK_ERASE_ADDR2     0x3C0004   // ...    
 
 // ------------------- Config Btye Definitions ----------
-#define  CONFIG_BYTES_TO_READ 0x0E      // The K22 config space exposes 14 bytes at 0x300000..0x30000D.
+#define  CONFIG_BYTES_TO_READ 0x01      // The K22 config space exposes 14 bytes at 0x300000..0x30000D.
 
 // ------------------- 4-bit Commands -------------------
 #define  TBLWRITE_CMD        0x0C      // Table Write 4 bit command (bin 1100)
@@ -28,6 +28,10 @@
 #define DELAY_TDLY1 5 // Delay Between 4-Bit Command and Command Operand
 #define DELAY_TDLY2 5 // Delay Between Last PGC falling edge of Command Byte to First PGC (raising) of Read of Data Word
 
+// -------------- global declarations --------------------------
+//volatile int input=0;
+uint8_t dataBit = 0;
+
 //-------------- Helper Functions ------------------------------
 
 // Quick calls to write clock HIGH or LOW with built-in delay
@@ -42,7 +46,7 @@ static inline void setVdd(bool on) {
 
 //Create and send 4 bit command
 //takes in a byte command (i.e 0x00)
-void send4Cmd(uint8_t  cmd){
+void send4Cmd(uint8_t cmd){
     
     //Data is latched on falling edge of clock.
     //Loop through 4 times by setting CLOCK HIGH and then
@@ -50,9 +54,21 @@ void send4Cmd(uint8_t  cmd){
     //Finally, latch DATA by writing CLOCK LOW
     for (uint8_t i = 0; i < 4; ++i) {
     setClkHigh();
-    digitalWrite(PIN_DATA, (cmd & 1) ? HIGH : LOW); // LSB first
+    Serial.println("Debug: PIN_CLK = HIGH");
+    dataBit = cmd & 1;
+    if (dataBit == HIGH){
+      digitalWrite(PIN_DATA, HIGH); // LSB first
+      Serial.print("Debug: PIN_DATA = ");
+      Serial.println(dataBit);
+    }
+    else{
+      digitalWrite(PIN_DATA, LOW); // LSB first
+      Serial.print("Debug: PIN_DATA = ");
+      Serial.println(dataBit);
+    }
     delayMicroseconds(DELAY_TDLY1);
     setClkLow();
+    Serial.println("Debug: PIN_CLK = LOW");
     cmd >>= 1;
   }
 }
@@ -67,9 +83,21 @@ void send16Payload(uint16_t payload){
     //Finally, latch DATA by writing CLOCK LOW
     for (uint8_t i = 0; i < 16; ++i) {
     setClkHigh();
-    digitalWrite(PIN_DATA, (payload & 1) ? HIGH : LOW); // LSB first
+    Serial.println("Debug: PIN_CLK = HIGH");
+    dataBit = payload & 1;
+    if (dataBit == HIGH){
+      digitalWrite(PIN_DATA, HIGH); // LSB first
+      Serial.print("Debug: PIN_DATA = ");
+      Serial.println(dataBit);
+    }
+    else {
+      digitalWrite(PIN_DATA, LOW); // LSB first
+      Serial.print("Debug: PIN_DATA = ");
+      Serial.println(dataBit);
+    }
     delayMicroseconds(DELAY_TDLY1);
     setClkLow();
+    Serial.println("Debug: PIN_CLK = LOW");
     payload >>= 1;
   }
 }
@@ -133,7 +161,7 @@ static uint8_t tblReadPI() {
   //Serial.println("Table Read - Post Increment (0b1001): TBLRD *+");
   send4Cmd(TBLREAD_PI_CMD);
 
-  // First 2 bytes (8 clock cycles) = operand (0x00); keep PGD low as output
+  // First 1 byte (8 clock cycles) = operand (0x00); keep PGD low as output
   pinMode(PIN_DATA, OUTPUT);
   for (uint8_t i = 0; i < 8; ++i) { 
     digitalWrite(PIN_DATA, LOW); 
@@ -149,19 +177,25 @@ static uint8_t tblReadPI() {
   uint8_t b = 0;
   for (uint8_t i = 0; i < 8; ++i) { 
     setClkHigh();
-    if (digitalRead(PIN_DATA)){
-      Serial.print("Debug: Byte ");
-      Serial.println(i);
-      Serial.print("Debug: PIN DATA Value (BIN) = 0b");
-      Serial.println(b |= (1u << i), BIN);
-      Serial.print("Debug: PIN DATA Value (HEX) = 0x");
-      Serial.println(b |= (1u << i), HEX);
-      Serial.print("Debug: PIN DATA Value (DEC) = ");
-      Serial.println(b |= (1u << i), DEC);
+    if (digitalRead(PIN_DATA)){ //if HIGH, set corresponding bit in b
       b |= (1u << i);
+      Serial.println("Debug: PIN DATA Value = HIGH");
+      Serial.print("Debug: Updated PIN Date Byte Value = 0b");
+      Serial.println(b, BIN);
+    }
+    else {
+      Serial.println("Debug: PIN DATA Value = LOW");
+      Serial.print("Debug: Updated PIN Date Byte Value = 0b");
+      Serial.println(b, BIN);
     }
     setClkLow();
   }
+  Serial.print("Debug: PIN DATA Value (BIN) = 0b");
+  Serial.println(b, BIN);
+  Serial.print("Debug: PIN DATA Value (HEX) = 0x");
+  Serial.println(b, HEX);
+  Serial.print("Debug: PIN DATA Value (DEC) = ");
+  Serial.println(b, DEC);
   return b;
 }
 
@@ -197,15 +231,14 @@ void enterProgramMode() {
   // Wait for the lines to settle.
   delay(10);
 
-  // Switch DATA and CLOCK into outputs.
-  pinMode(PIN_DATA, OUTPUT);
-  pinMode(PIN_CLOCK, OUTPUT);
-
-  // Raise MCLR, then VDD.
   digitalWrite(PIN_MCLR, HIGH);
   delay(10);
   digitalWrite(PIN_VDD, HIGH);
   delay(10);
+  
+  // Switch DATA and CLOCK into outputs.
+  pinMode(PIN_DATA, OUTPUT);
+  pinMode(PIN_CLOCK, OUTPUT);
 }
 
 void exitProgramMode() {
@@ -249,9 +282,6 @@ void printMenu() {
   Serial.println("4 - Exit Program Mode");
   Serial.println();
 }
-
-// global declarations
-//volatile int input=0;
 
 
 // only runs once
