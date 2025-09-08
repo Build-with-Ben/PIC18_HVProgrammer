@@ -52,23 +52,25 @@ void send4Cmd(uint8_t cmd){
     //Loop through 4 times by setting CLOCK HIGH and then
     //writng DATA (LOW or HIGH) based on cmd arg
     //Finally, latch DATA by writing CLOCK LOW
+    pinMode(PIN_DATA, OUTPUT);
+
     for (uint8_t i = 0; i < 4; ++i) {
     setClkHigh();
-    Serial.println("Debug: PIN_CLK = HIGH");
+    //Serial.println("Debug: PIN_CLK = HIGH");
     dataBit = cmd & 1;
     if (dataBit == HIGH){
       digitalWrite(PIN_DATA, HIGH); // LSB first
-      Serial.print("Debug: PIN_DATA = ");
-      Serial.println(dataBit);
+      //Serial.print("Debug: PIN_DATA = ");
+      //Serial.println(dataBit);
     }
     else{
       digitalWrite(PIN_DATA, LOW); // LSB first
-      Serial.print("Debug: PIN_DATA = ");
-      Serial.println(dataBit);
+      //Serial.print("Debug: PIN_DATA = ");
+      //Serial.println(dataBit);
     }
     delayMicroseconds(DELAY_TDLY1);
     setClkLow();
-    Serial.println("Debug: PIN_CLK = LOW");
+    //Serial.println("Debug: PIN_CLK = LOW");
     cmd >>= 1;
   }
 }
@@ -83,21 +85,21 @@ void send16Payload(uint16_t payload){
     //Finally, latch DATA by writing CLOCK LOW
     for (uint8_t i = 0; i < 16; ++i) {
     setClkHigh();
-    Serial.println("Debug: PIN_CLK = HIGH");
+    //Serial.println("Debug: PIN_CLK = HIGH");
     dataBit = payload & 1;
     if (dataBit == HIGH){
       digitalWrite(PIN_DATA, HIGH); // LSB first
-      Serial.print("Debug: PIN_DATA = ");
-      Serial.println(dataBit);
+      //Serial.print("Debug: PIN_DATA = ");
+      //Serial.println(dataBit);
     }
     else {
       digitalWrite(PIN_DATA, LOW); // LSB first
-      Serial.print("Debug: PIN_DATA = ");
-      Serial.println(dataBit);
+      //Serial.print("Debug: PIN_DATA = ");
+      //Serial.println(dataBit);
     }
     delayMicroseconds(DELAY_TDLY1);
     setClkLow();
-    Serial.println("Debug: PIN_CLK = LOW");
+    //Serial.println("Debug: PIN_CLK = LOW");
     payload >>= 1;
   }
 }
@@ -179,23 +181,23 @@ static uint8_t tblReadPI() {
     setClkHigh();
     if (digitalRead(PIN_DATA)){ //if HIGH, set corresponding bit in b
       b |= (1u << i);
-      Serial.println("Debug: PIN DATA Value = HIGH");
-      Serial.print("Debug: Updated PIN Date Byte Value = 0b");
-      Serial.println(b, BIN);
+      //Serial.println("Debug: PIN DATA Value = HIGH");
+      //Serial.print("Debug: Updated PIN Date Byte Value = 0b");
+      //Serial.println(b, BIN);
     }
     else {
-      Serial.println("Debug: PIN DATA Value = LOW");
-      Serial.print("Debug: Updated PIN Date Byte Value = 0b");
-      Serial.println(b, BIN);
+      //Serial.println("Debug: PIN DATA Value = LOW");
+      //Serial.print("Debug: Updated PIN Date Byte Value = 0b");
+      //Serial.println(b, BIN);
     }
     setClkLow();
   }
-  Serial.print("Debug: PIN DATA Value (BIN) = 0b");
-  Serial.println(b, BIN);
-  Serial.print("Debug: PIN DATA Value (HEX) = 0x");
-  Serial.println(b, HEX);
-  Serial.print("Debug: PIN DATA Value (DEC) = ");
-  Serial.println(b, DEC);
+  //Serial.print("Debug: PIN DATA Value (BIN) = 0b");
+  //Serial.println(b, BIN);
+  //Serial.print("Debug: PIN DATA Value (HEX) = 0x");
+  //Serial.println(b, HEX);
+  //Serial.print("Debug: PIN DATA Value (DEC) = ");
+  //Serial.println(b, DEC);
   return b;
 }
 
@@ -314,6 +316,8 @@ void setup() {
 void loop() {
 
   uint8_t config[CONFIG_BYTES_TO_READ];
+  unsigned long startTime;
+  unsigned long elapsedTime;
 
   if (Serial.available() > 0) {
 
@@ -331,17 +335,24 @@ void loop() {
 
         // Check if Bulk Erase is selected
         case '1':
+          startTime = millis();
           Serial.println(" === Bulk Erase === ");
           Serial.println("Entering program mode...");
           enterProgramMode();
           // Todo: Add bulk erase commands and sequence
           Serial.println("Erasing data...");
+          elapsedTime = millis() - startTime;
+          elapsedTime = elapsedTime/1000;
+          Serial.print("Execution Time:");
+          Serial.println(elapsedTime, 4);
           Serial.println("Exiting program mode...");
           //exitProgramMode();
+          
           break;
         
         // Check if configuration bits read operation is selected
         case '2':
+          startTime = millis();
           Serial.println(" === Read Config Bits === ");
           Serial.println("Entering program mode...");
           enterProgramMode();
@@ -352,7 +363,7 @@ void loop() {
           Serial.println(count);
           // Check if read succeeded
           if (count == CONFIG_BYTES_TO_READ) {
-              Serial.println("Config bytes read successfully:");
+              Serial.println("Config bytes read successfully!");
 
               // Print results
               for (size_t i = 0; i < CONFIG_BYTES_TO_READ; i++) {
@@ -374,6 +385,11 @@ void loop() {
           } else {
               Serial.println("Error: Could not read configuration bytes.");
           }
+          elapsedTime = millis() - startTime;
+          elapsedTime = elapsedTime/1000;
+          Serial.print("Execution Time: ");
+          Serial.print(elapsedTime);
+          Serial.println(" seconds");
           Serial.println("Exiting program mode...");
           exitProgramMode();
           break; 
