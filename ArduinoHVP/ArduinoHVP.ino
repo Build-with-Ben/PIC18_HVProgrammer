@@ -1,10 +1,12 @@
+#pragma GCC optimize ("O0")
+
 // ------------------- Desired addresses ----------------
-#define  CONFIG_ADDR          0x300006   // CONFIG register addresses 0x300000..0x30000D
+#define  CONFIG_ADDR          0x300000   // CONFIG register addresses 0x300000..0x30000D
 #define  BULK_ERASE_ADDR1     0x3C0005   // Bulk erase is broken up in two registers
 #define  BULK_ERASE_ADDR2     0x3C0004   // ...    
 
 // ------------------- Config Btye Definitions ----------
-#define  CONFIG_BYTES_TO_READ 0x01      // The K22 config space exposes 14 bytes at 0x300000..0x30000D.
+#define  CONFIG_BYTES_TO_READ 14      // The K22 config space exposes 14 bytes at 0x300000..0x30000D.
 
 // ------------------- 4-bit Commands -------------------
 #define  TBLWRITE_CMD        0x0C      // Table Write 4 bit command (bin 1100)
@@ -31,8 +33,15 @@
 // -------------- global declarations --------------------------
 //volatile int input=0;
 uint8_t dataBit = 0;
+static uint8_t config[CONFIG_BYTES_TO_READ];
 
 //-------------- Helper Functions ------------------------------
+
+void caseUsed() {}
+void myCase5() __attribute__((used));
+void myCase5() {
+    Serial.println("CASE 5");
+}
 
 // Quick calls to write clock HIGH or LOW with built-in delay
 static inline void setClkHigh() { digitalWrite(PIN_CLOCK, HIGH); delayMicroseconds(DELAY_TDLY1); }
@@ -282,7 +291,83 @@ void printMenu() {
   Serial.println("2 - Read Configuration Bits");
   Serial.println("3 - Enter Program Mode");
   Serial.println("4 - Exit Program Mode");
+  Serial.println("5 - Test MCLR Write");
+  Serial.println("6 - Get Device ID");
   Serial.println();
+}
+
+void readDeviceID()
+{
+    const uint32_t ADDR_DEVIDL = 0x3FFFFE;
+    const uint32_t ADDR_DEVIDH = 0x3FFFFF;
+
+    enterProgramMode();
+
+    Serial.println("Reading Device ID...");
+
+    setTBLPTR(ADDR_DEVIDL);
+    uint8_t devidL = tblReadPI();
+
+    // The post-increment moved us to 0x3FFFFF automatically
+    uint8_t devidH = tblReadPI();
+
+    exitProgramMode();
+
+    Serial.print("Device ID Low  (DEVIDL) = 0x");
+    Serial.println(devidL, HEX);
+    Serial.print("Device ID High (DEVIDH) = 0x");
+    Serial.println(devidH, HEX);
+
+    uint16_t fullID = ((uint16_t)devidH << 8) | devidL;
+
+    Serial.print("Full Device ID = 0x");
+    Serial.println(fullID, HEX);
+}
+
+//------------------- Switch Case Helpers ------------------
+
+void doBulkErase() {
+    Serial.println("Performing Bulk Erase...");
+    enterProgramMode();
+    // your erase code here
+    exitProgramMode();
+}
+
+void readConfigCase(uint8_t* config) {
+    Serial.println("Reading Config bits...");
+    enterProgramMode();
+    size_t count = readConfigBits(config);
+    Serial.print("Number of bytes read: "); 
+    Serial.println(count);
+    if (count > 0) {
+        Serial.println("Config bytes:");
+
+        for (size_t i = 0; i < count; i++) {
+
+            // CONFIG register index (CONFIG1, CONFIG2, etc.)
+            size_t cfgNum = (i / 2) + 1;      
+
+            Serial.print("CONFIG");
+            Serial.print(cfgNum);
+
+            // low or high byte?
+            if ((i & 1) == 0)
+                Serial.print("L = 0x");
+            else
+                Serial.print("H = 0x");
+
+            if (config[i] < 0x10) Serial.print("0");  // leading zero
+            Serial.println(config[i], HEX);
+        }
+    }
+    exitProgramMode();
+}
+
+void testMCLR() {
+    Serial.println("Testing MCLR pin...");
+    digitalWrite(PIN_MCLR, HIGH);
+    delay(3000);
+    digitalWrite(PIN_MCLR, LOW);
 }
 
 
@@ -305,6 +390,7 @@ void setup() {
   pinMode(PIN_DATA, INPUT);
   pinMode(PIN_VDD, OUTPUT);
   pinMode(PIN_MCLR, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
 
   printMenu();
 
@@ -314,102 +400,52 @@ void setup() {
   //to begin programming sequence chosen and 
   //outputs serial information based on status
 void loop() {
-
-  uint8_t config[CONFIG_BYTES_TO_READ];
+  
   unsigned long startTime;
   unsigned long elapsedTime;
 
   if (Serial.available() > 0) {
 
-    // read the incoming serial input
-    int input = Serial.read();
+    // Read a full line and trim CR/LF so newline characters
+    // sent by the Serial Monitor don't get interpreted as commands.
+    String line = Serial.readStringUntil('\n');
+    line.trim(); // removes leading/trailing whitespace including '\r'
+
+    if (line.length() == 0) {
+      // empty line (only newline/CR was sent) — skip processing
+      return;
+    }
+
+    char input = line.charAt(0);
     
-    // execute certain sequences based on input
-    // check if input is in range
-    if (input >= '1' && input <= '4') {
-      Serial.print("You entered: ");
-      Serial.print(input - '0');
-      Serial.println("\n");
-      delay(50);  // give time to flush to serial
+    if (input >= '1' && input <= '6') {
+
+      Serial.println();
+
       switch (input) {
 
-        // Check if Bulk Erase is selected
-        case '1':
-          startTime = millis();
-          Serial.println(" === Bulk Erase === ");
-          Serial.println("Entering program mode...");
-          enterProgramMode();
-          // Todo: Add bulk erase commands and sequence
-          Serial.println("Erasing data...");
-          elapsedTime = millis() - startTime;
-          elapsedTime = elapsedTime/1000;
-          Serial.print("Execution Time:");
-          Serial.println(elapsedTime, 4);
-          Serial.println("Exiting program mode...");
-          //exitProgramMode();
-          
-          break;
+        case '1': doBulkErase(); break;
+
+        case '2': readConfigCase(config); break;
+
+        case '3': enterProgramMode(); break;
         
-        // Check if configuration bits read operation is selected
-        case '2':
-          startTime = millis();
-          Serial.println(" === Read Config Bits === ");
-          Serial.println("Entering program mode...");
-          enterProgramMode();
-          Serial.println("Reading configuration bits...");
-          size_t count = readConfigBits(config);  // Read configuration memory store in config[], retuns num bytes read
+        case '4': exitProgramMode(); break;
+        
+        case '5': testMCLR(); break;
 
-          Serial.print("Number of bytes read: ");
-          Serial.println(count);
-          // Check if read succeeded
-          if (count == CONFIG_BYTES_TO_READ) {
-              Serial.println("Config bytes read successfully!");
+        case '6': readDeviceID(); break;
 
-              // Print results
-              for (size_t i = 0; i < CONFIG_BYTES_TO_READ; i++) {
-                  // Determine config word index (i/2 because each word has L+H)
-                  size_t wordIndex = i / 2 + 1;  
-
-                  Serial.print("CONFIG");
-                  Serial.print(wordIndex);
-
-                  if (i % 2 == 0) {
-                      Serial.print("L = 0x");   // Even address → Low byte
-                  } else {
-                      Serial.print("H = 0x");   // Odd address → High byte
-                  }
-
-                  if (config[i] < 0x10) Serial.print("0"); // leading zero
-                  Serial.println(config[i], HEX);
-              }
-          } else {
-              Serial.println("Error: Could not read configuration bytes.");
-          }
-          elapsedTime = millis() - startTime;
-          elapsedTime = elapsedTime/1000;
-          Serial.print("Execution Time: ");
-          Serial.print(elapsedTime);
-          Serial.println(" seconds");
-          Serial.println("Exiting program mode...");
-          exitProgramMode();
-          break; 
-
-        case '3':
-          Serial.println(" === Test: Enter Program Mode === ");
-          Serial.println("Testing..."); 
-          delay(50);  // give time to flush to serial
-          //enterProgramMode();
-          break;
-
-        case '4':
-          Serial.println(" === Test: Exit Program Mode === ");
-          Serial.println("Testing..."); 
-          delay(50);  // give time to flush to serial
-          //exitProgramMode();
+        default:
+          // Should never reach here because of the range check
+          Serial.print("Default hit! input=0x");
+          Serial.println((int)input, HEX);
           break;
       }
+      
       Serial.println("Action(s) completed. Enter new command.");
       Serial.println("\n");
+      printMenu();
     }
     else {
         Serial.println("Not a valid input. Try Again.");
