@@ -1,27 +1,33 @@
 #pragma GCC optimize ("O0")
 
-// ------------------- Desired addresses ----------------
+// ------------------- Various memory addresses ----------------
 #define  CONFIG_ADDR          0x300000   // CONFIG register addresses 0x300000..0x30000D
 #define  BULK_ERASE_ADDR1     0x3C0005   // Bulk erase is broken up in two registers
 #define  BULK_ERASE_ADDR2     0x3C0004   // ...    
+#define  CONFIG4L_ADDR        0x300006   // CONFIG4L register address
+
+// --------------------- EECON1 Register Instructions ------------
+#define EEPGD_SET             0x8EA6     // Selects the program/config space for reads/writes
+#define CFGS_SET              0x8CA6     // Selects the configuration space
+#define WREN_SET              0x84A6     // Enables writes
+#define WREN_CLEAR            0x94A6     // Disables writes
+#define WR_SET                0x82A6     // Begins write cycle
+#define WR_CLEAR              0x92A6     // End write cycle
 
 // ------------------- Config Btye Definitions ----------
-#define  CONFIG_BYTES_TO_READ 14      // The K22 config space exposes 14 bytes at 0x300000..0x30000D.
+#define  CONFIG_BYTES_TO_READ 14         // The K22 config space exposes 14 bytes at 0x300000..0x30000D.
 
 // ------------------- 4-bit Commands -------------------
-#define  TBLWRITE_CMD        0x0C      // Table Write 4 bit command (bin 1100)
-#define  TBLREAD_PI_CMD      0x09      // Table Read Post Increment 4 bit command(bin 1001)
-#define  COREINSTR_CMD       0x00      // Core instruction 4 bit command (bin 0000)
+#define  TBLWRITE_CMD        0x0C        // Table Write 4 bit command (bin 1100)
+#define  TBLREAD_PI_CMD      0x09        // Table Read Post Increment 4 bit command(bin 1001)
+#define  TBLREAD_CMD         0x08        // Table Read No pre or post inc/dec
+#define  COREINSTR_CMD       0x00        // Core instruction 4 bit command (bin 0000)
 
 // ------------------- Pin mappings ---------------------
 #define  PIN_VDD      2     // PIC18 power supply
 #define  PIN_MCLR     3     // Data direction register for DATA port
 #define  PIN_DATA     4     // PGD = Data = RB6 on PIC
 #define  PIN_CLOCK    5     // PGC = Clk = RB7 on PIC
-
-#ifndef PIN_VDD_EN
-#define PIN_VDD_EN    -1
-#endif
 
 // All delays are in microseconds.
 #define DELAY_SETTLE 50 // Delay for lines to settle for reset
@@ -46,12 +52,6 @@ void myCase5() {
 // Quick calls to write clock HIGH or LOW with built-in delay
 static inline void setClkHigh() { digitalWrite(PIN_CLOCK, HIGH); delayMicroseconds(DELAY_TDLY1); }
 static inline void setClkLow() { digitalWrite(PIN_CLOCK, LOW);  delayMicroseconds(DELAY_TDLY1);  }
-
-static inline void setVdd(bool on) {
-#if PIN_VDD_EN >= 0
-  digitalWrite(PIN_VDD_EN, on ? HIGH : LOW);
-#endif
-}
 
 //Create and send 4 bit command
 //takes in a byte command (i.e 0x00)
@@ -113,6 +113,34 @@ void send16Payload(uint16_t payload){
   }
 }
 
+// Send 8 zero operand clocks for TBLWT
+static inline void send8OperandZero() {
+  pinMode(PIN_DATA, OUTPUT);
+  for (uint8_t i = 0; i < 8; ++i) {
+    digitalWrite(PIN_DATA, LOW);   // operand bit = 0
+    setClkHigh();
+    setClkLow();
+  }
+}
+
+// Send TBLWT 4-bit command plus operand clocks (per datasheet)
+static void sendTBLWT() {
+  send4Cmd(TBLWRITE_CMD);   // 0x0C
+  send8OperandZero();
+}
+
+// Read a single config byte at addr (assumes program mode already entered)
+uint8_t readSingleConfigByte(uint32_t addr) {
+  
+  sendCoreInstr(EEPGD_SET); // BSF EECON1, EEPGD (bit 6)
+  sendCoreInstr(CFGS_SET); // BSF EECON1, CFGS  (bit 7)
+  delayMicroseconds(5);
+  setTBLPTR(addr);
+  delayMicroseconds(5);
+  uint8_t b = tblReadPI(); // TBLRD post increment
+  return b;
+}
+
 //Sends Core instruction (0b0000) 4 bit command plus 16 bit payload arg (data)
 //Used in many operations to setup registers for use
 void sendCoreInstr(uint16_t data){
@@ -128,57 +156,53 @@ void sendCoreInstr(uint16_t data){
 // address via input arg 'addr' 
 static void setTBLPTR(uint32_t addr) {
 
-  Serial.print("Where ");
+  //Serial.print("Where ");
 
   uint8_t U = (addr >> 16) & 0xFF; // takes first byte of add and applies to U
-  Serial.print("U = 0x");
-  Serial.print(U, HEX);
+  //Serial.print("U = 0x");
+  //Serial.print(U, HEX);
 
   uint8_t H = (addr >>  8) & 0xFF; // takes second byte of add and applies to H
-  Serial.print(", H = 0x");
-  Serial.print(H, HEX);
+  //Serial.print(", H = 0x");
+  //Serial.print(H, HEX);
 
   uint8_t L = (addr >>  0) & 0xFF; // takes third byte of add and applies to L
-  Serial.print(", and L = 0x");
-  Serial.println(L, HEX);
+  //Serial.print(", and L = 0x");
+  //Serial.println(L, HEX);
 
-  Serial.print("Core Instruction (0b0000): MOVWF U 0x");
-  Serial.println(0x0E00 | U, HEX);
+  //Serial.print("Core Instruction (0b0000): MOVLW U 0x");
+  //Serial.println(0x0E00 | U, HEX);
   sendCoreInstr(0x0E00 | U);  // Core instruction MOVLW U and Bitwise OR 0E and U 
 
-  Serial.print("Core Instruction (0b0000): MOVLW U 0x");
-  Serial.println(0x6EF8, HEX);
+  //Serial.print("Core Instruction (0b0000): MOVWF U 0x");
+  //Serial.println(0x6EF8, HEX);
   sendCoreInstr(0x6EF8);      // Core instruction MOVWF TBLPTRU - Move to TBLPRTU
 
-  Serial.print("Core Instruction (0b0000): MOVWF H 0x");
-  Serial.println(0x0E00 | H, HEX);
+  //Serial.print("Core Instruction (0b0000): MOVLW H 0x");
+  //Serial.println(0x0E00 | H, HEX);
   sendCoreInstr(0x0E00 | H);  // Core instruction MOVLW H and Bitwise OR 0E and H 
 
-  Serial.print("Core Instruction (0b0000): MOVLW H 0x");
-  Serial.println(0x6EF7, HEX);
+  //Serial.print("Core Instruction (0b0000): MOVWF H 0x");
+  //Serial.println(0x6EF7, HEX);
   sendCoreInstr(0x6EF7);      // Core instruction MOVWF TBLPTRH - Move to TBLPRTH
 
-  Serial.print("Core Instruction (0b0000): MOVWF L 0x");
-  Serial.println(0x0E00 | L, HEX);
+  //Serial.print("Core Instruction (0b0000): MOVLW L 0x");
+  //Serial.println(0x0E00 | L, HEX);
   sendCoreInstr(0x0E00 | L);  // Core instruction MOVLW L and Bitwise OR 0E and L 
 
-  Serial.print("Core Instruction (0b0000): MOVLW L 0x");
-  Serial.println(0x6EF6, HEX);
+  //Serial.print("Core Instruction (0b0000): MOVWF L 0x");
+  //Serial.println(0x6EF6, HEX);
   sendCoreInstr(0x6EF6);      // Core instruction MOVWF TBLPTRL - Move to TBLPRTL
 }
 
 // Table Read, post-increment: returns 1 byte at TBLPTR then TBLPTR++
-static uint8_t tblReadPI() {
-  //Serial.println("Table Read - Post Increment (0b1001): TBLRD *+");
-  send4Cmd(TBLREAD_PI_CMD);
+static uint8_t tblRead() {
+  
+  Serial.println("Performing TBLRD*...");
+  send4Cmd(TBLREAD_CMD);
 
   // First 1 byte (8 clock cycles) = operand (0x00); keep PGD low as output
-  pinMode(PIN_DATA, OUTPUT);
-  for (uint8_t i = 0; i < 8; ++i) { 
-    digitalWrite(PIN_DATA, LOW); 
-    setClkHigh(); 
-    setClkLow(); 
-    }
+  send8OperandZero();
 
   // Turn PGD to input before the last 8 clocks to sample data (LSB->MSB)
   pinMode(PIN_DATA, INPUT);
@@ -190,23 +214,42 @@ static uint8_t tblReadPI() {
     setClkHigh();
     if (digitalRead(PIN_DATA)){ //if HIGH, set corresponding bit in b
       b |= (1u << i);
-      //Serial.println("Debug: PIN DATA Value = HIGH");
-      //Serial.print("Debug: Updated PIN Date Byte Value = 0b");
-      //Serial.println(b, BIN);
     }
     else {
-      //Serial.println("Debug: PIN DATA Value = LOW");
-      //Serial.print("Debug: Updated PIN Date Byte Value = 0b");
-      //Serial.println(b, BIN);
     }
     setClkLow();
   }
-  //Serial.print("Debug: PIN DATA Value (BIN) = 0b");
-  //Serial.println(b, BIN);
-  //Serial.print("Debug: PIN DATA Value (HEX) = 0x");
-  //Serial.println(b, HEX);
-  //Serial.print("Debug: PIN DATA Value (DEC) = ");
-  //Serial.println(b, DEC);
+  Serial.print("Register Value: 0x");
+  Serial.println(b, HEX);
+  return b;
+}
+
+// Table Read, post-increment: returns 1 byte at TBLPTR then TBLPTR++
+static uint8_t tblReadPI() {
+  
+  Serial.println("Performing TBLRD*+...");
+  send4Cmd(TBLREAD_PI_CMD);
+
+  // First 1 byte (8 clock cycles) = operand (0x00); keep PGD low as output
+  send8OperandZero();
+
+  // Turn PGD to input before the last 8 clocks to sample data (LSB->MSB)
+  pinMode(PIN_DATA, INPUT);
+  delayMicroseconds(DELAY_TDLY1);
+  delayMicroseconds(DELAY_TDLY1);
+
+  uint8_t b = 0;
+  for (uint8_t i = 0; i < 8; ++i) { 
+    setClkHigh();
+    if (digitalRead(PIN_DATA)){ //if HIGH, set corresponding bit in b
+      b |= (1u << i);
+    }
+    else {
+    }
+    setClkLow();
+  }
+  Serial.print("Register Value: 0x");
+  Serial.println(b, HEX);
   return b;
 }
 
@@ -214,14 +257,19 @@ int i;
 
 // Read the 14 configuration bytes at 0x300000..0x30000D into 'out'.
 // Returns number of bytes read.
-size_t readConfigBits(uint8_t* bits) {
-  if (!bits) return 0; // check if pointer is NULL, return zero if yes
+size_t readAllConfigBytes(uint8_t* bytes) {
+  if (!bytes) return 0; // check if pointer is NULL, return zero if yes
   Serial.print("Starting at Address 0x");
   Serial.println(CONFIG_ADDR, HEX);
+
+  // Select config space for reading
+  sendCoreInstr(EEPGD_SET); // BSF EECON1, EEPGD (bit 6)
+  sendCoreInstr(CFGS_SET); // BSF EECON1, CFGS  (bit 7)
+
+  // Set Table pointer address
   setTBLPTR(CONFIG_ADDR);
-  for (size_t i = 0; i < CONFIG_BYTES_TO_READ; ++i){ // do this 14 times
-    bits[i] = tblReadPI();
-    //Serial.println(bits[i]);
+  for (size_t i = 0; i < CONFIG_BYTES_TO_READ; ++i){
+    bytes[i] = tblReadPI();
   }
   return CONFIG_BYTES_TO_READ;
 }
@@ -234,17 +282,19 @@ void enterProgramMode() {
   //Goal is to switch VDD on via FET or transistor from external batt
 
   // Lower MCLR, VDD, DATA, and CLOCK to start in a reset/power off state
+  pinMode(PIN_CLOCK, OUTPUT);
+  pinMode(PIN_DATA, OUTPUT);
   digitalWrite(PIN_MCLR, LOW);
   digitalWrite(PIN_VDD, LOW);
   digitalWrite(PIN_DATA, LOW);
   digitalWrite(PIN_CLOCK, LOW);
 
   // Wait for the lines to settle.
-  delay(10);
+  delayMicroseconds(200);
 
-  digitalWrite(PIN_MCLR, HIGH);
-  delay(10);
   digitalWrite(PIN_VDD, HIGH);
+  delay(10);
+  digitalWrite(PIN_MCLR, HIGH);
   delay(10);
   
   // Switch DATA and CLOCK into outputs.
@@ -256,7 +306,11 @@ void exitProgramMode() {
 
     // Lower MCLR, VDD, DATA, and CLOCK.
     digitalWrite(PIN_MCLR, LOW);
+    delay(1);
     digitalWrite(PIN_VDD, LOW);
+    delay(1);
+
+    // Clear the lines
     digitalWrite(PIN_DATA, LOW);
     digitalWrite(PIN_CLOCK, LOW);
 
@@ -293,6 +347,9 @@ void printMenu() {
   Serial.println("4 - Exit Program Mode");
   Serial.println("5 - Test MCLR Write");
   Serial.println("6 - Get Device ID");
+  Serial.println("7 - Enable Low Voltage Programming");
+  Serial.println("8 - Test VDD Write");
+  Serial.println("9 - Read CONFIG4L Register");
   Serial.println();
 }
 
@@ -324,6 +381,54 @@ void readDeviceID()
     Serial.println(fullID, HEX);
 }
 
+void writeConfigByte(uint32_t configAddress, uint8_t value)
+{
+    uint8_t U = (configAddress >> 16) & 0xFF;
+    uint8_t H = (configAddress >>  8) & 0xFF;
+    uint8_t L = (configAddress >>  0) & 0xFF;
+
+    // Load TBLPTR address
+    sendCoreInstr(0x0E00 | U);  // MOVLW U
+    sendCoreInstr(0x6EF8);      // MOVWF TBLPTRU
+    sendCoreInstr(0x0E00 | H);  
+    sendCoreInstr(0x6EF7);      // MOVWF TBLPTRH
+    sendCoreInstr(0x0E00 | L);  
+    sendCoreInstr(0x6EF6);      // MOVWF TBLPTRL
+
+    // Load TABLAT value
+    sendCoreInstr(0x0E00 | value);  // MOVLW val
+    sendCoreInstr(0x6EF5);          // MOVWF TABLAT
+
+    // Select config space, enable writes
+    sendCoreInstr(EEPGD_SET);  // BSF EECON1, EEPGD
+    sendCoreInstr(CFGS_SET);  // BSF EECON1, CFGS
+    sendCoreInstr(WREN_SET);  // BSF EECON1, WREN
+    
+    sendTBLWT();
+
+    // Send Required unlock commands
+    sendCoreInstr(0x0E55);  // MOVLW 0x55
+    sendCoreInstr(0x6EA6);  // MOVWF NVMCON2
+    sendCoreInstr(0x0EAA);  // MOVLW 0xAA
+    sendCoreInstr(0x6EA6);  // MOVWF NVMCON2
+
+    // Start write by setting WR bit
+    sendCoreInstr(WR_SET);  // BSF EECON1, WR
+
+    // Wait at least 5ms
+    delay(6);
+
+    uint8_t verify = readSingleConfigByte(configAddress);
+    if (verify != value) {
+      Serial.println("Write verification FAILED");
+    } else {
+      Serial.println("Write verified OK");
+    }
+
+    // Clear WREN bit
+    sendCoreInstr(WREN_CLEAR);
+}
+
 //------------------- Switch Case Helpers ------------------
 
 void doBulkErase() {
@@ -336,7 +441,7 @@ void doBulkErase() {
 void readConfigCase(uint8_t* config) {
     Serial.println("Reading Config bits...");
     enterProgramMode();
-    size_t count = readConfigBits(config);
+    size_t count = readAllConfigBytes(config);
     Serial.print("Number of bytes read: "); 
     Serial.println(count);
     if (count > 0) {
@@ -370,6 +475,37 @@ void testMCLR() {
     digitalWrite(PIN_MCLR, LOW);
 }
 
+void testVdd(){
+    Serial.println("Testing VDD pin...");
+    digitalWrite(PIN_VDD, HIGH);
+    delay(3000);
+    digitalWrite(PIN_VDD, LOW);
+}
+
+void enableLVP(){
+    Serial.println("Enabling LVP mode...");
+    enterProgramMode();
+
+    // Read CONFIG4L (address 0x300006) so we know its current value
+    uint8_t cfg4L = readSingleConfigByte(CONFIG4L_ADDR);
+
+    Serial.println("Reading current CONFIG4L register value...");
+    Serial.print("Current CONFIG4L Value = 0x");
+    Serial.println(cfg4L, HEX);
+
+    // Bitwise OR LVP bit (bit 2) on CONFIG4L register
+    cfg4L |= 0x04;
+
+    Serial.println("Setting new CONFIG4L register value...");
+    Serial.print("New CONFIG4L Value = 0x");
+    Serial.println(cfg4L, HEX);
+
+    // Write new value back to CONFIG4L register
+    writeConfigByte(CONFIG4L_ADDR, cfg4L);
+
+    exitProgramMode();
+  
+}
 
 // only runs once
 void setup() {
@@ -418,7 +554,7 @@ void loop() {
 
     char input = line.charAt(0);
     
-    if (input >= '1' && input <= '6') {
+    if (input >= '1' && input <= '9') {
 
       Serial.println();
 
@@ -435,6 +571,12 @@ void loop() {
         case '5': testMCLR(); break;
 
         case '6': readDeviceID(); break;
+
+        case '7': enableLVP(); break;
+
+        case '8': testVdd(); break;
+
+        case '9': readSingleConfigByte(CONFIG4L_ADDR); break;
 
         default:
           // Should never reach here because of the range check
