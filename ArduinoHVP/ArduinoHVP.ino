@@ -212,12 +212,14 @@ static uint8_t tblRead(uint8_t cmd) {
   uint8_t b = 0;
   for (uint8_t i = 0; i < 8; ++i) { 
     setClkHigh();
-    delayMicroseconds(100); // Give the PIC time to drive the line HIGH/LOW
+    delayMicroseconds(15); // Give the PIC time to drive the line HIGH/LOW
+    setClkLow();
+    delayMicroseconds(30); // Stability delay
     if (digitalRead(PIN_DATA)){ //if HIGH, set corresponding bit in b
       b |= (1u << i);
     }
-    setClkLow();
-    delayMicroseconds(100); // Stability delay
+    //setClkLow();
+    //delayMicroseconds(100); // Stability delay
   }
 
   // Reset Data line
@@ -323,47 +325,108 @@ void printMenu() {
  * 7. Wait and verify write was successful
  * 
  */
+//void writeByte(uint32_t addr, uint8_t value)
+//{
+//    // Force clear EECON1 bits
+//    sendCoreInstr(CFGS_CLEAR); 
+//    sendCoreInstr(EEPGD_CLEAR);
+//
+//    setTBLPTR(addr);
+//
+//    // Detemine write mode based on address
+//    // where EEPROM: 0xF00000+ | Config: 0x300000+ | UserID: 0x200000+
+//    if (addr >= 0x300000 || (addr >= 0x200000 && addr < 0x300000)) {
+//        sendCoreInstr(CFGS_SET);
+//    }
+//    
+//    // Load TABLAT value
+//    sendCoreInstr(0x0E00 | value);  // MOVLW val
+//    sendCoreInstr(0x6EF5);          // MOVWF TABLAT
+//
+//    sendCoreInstr(WREN_SET);  // BSF EECON1, WREN
+//
+//    
+//    //sendTBLWT(TBLWRITE_PI_CMD);
+//    send4Cmd(TBLWRITE_CMD);    // 0x0C
+//    send16Payload(0x0000 | value); // Data is in the low byte
+//    delayMicroseconds(50);
+//
+//    // Send Required unlock commands
+//    sendCoreInstr(0x0E55);  // MOVLW 0x55
+//    sendCoreInstr(0x6EA7);  // MOVWF EECON2
+//    sendCoreInstr(0x0EAA);  // MOVLW 0xAA
+//    sendCoreInstr(0x6EA7);  // MOVWF EECON2
+//
+//    // Start write by setting WR bit
+//    sendCoreInstr(WR_SET);  // BSF EECON1, WR
+//
+//    sendCoreInstr(0x0000); 
+//    sendCoreInstr(0x0000);
+//
+//    // Wait at least 5ms
+//    delay(10);
+//
+//    // Clear WREN bit
+//    sendCoreInstr(WREN_CLEAR);
+//}
+
 void writeByte(uint32_t addr, uint8_t value)
 {
-    // Force clear EECON1 bits
-    sendCoreInstr(CFGS_CLEAR); 
-    sendCoreInstr(EEPGD_CLEAR);
+    // 1. Reset EECON1 for EEPROM (EEPGD=0, CFGS=0)
+    sendCoreInstr(0x9EA6); // BCF EECON1, EEPGD
+    sendCoreInstr(0x9CA6); // BCF EECON1, CFGS
 
     setTBLPTR(addr);
 
-    // Detemine write mode based on address
-    // where EEPROM: 0xF00000+ | Config: 0x300000+ | UserID: 0x200000+
-    if (addr >= 0x300000 || (addr >= 0x200000 && addr < 0x300000)) {
-        sendCoreInstr(CFGS_SET);
+    // 2. Load the data byte using the NVM Load Command (0x02)
+    // This bypasses the Table Write buffer and goes straight to the NVM latch
+    send4Cmd(0x02); 
+    send16Payload(value); // PIC takes the lower 8 bits
+
+    // 3. Enable Writes
+    sendCoreInstr(WREN_SET); // BSF EECON1, WREN
+
+    // 4. Required Unlock Sequence
+    sendCoreInstr(0x0E55); sendCoreInstr(0x6EA7); // MOVLW 55, MOVWF EECON2
+    sendCoreInstr(0x0EAA); sendCoreInstr(0x6EA7); // MOVLW AA, MOVWF EECON2
+
+    // 5. Start Write
+    delayMicroseconds(10);
+    sendCoreInstr(WR_SET); // BSF EECON1, WR
+
+    // 6. Provide "Processor Clocks" for the internal state machine
+    // The PIC needs PGC toggles to advance its internal write timer
+    for(int i=0; i<5; i++) {
+        sendCoreInstr(0x0000); // NOPs
     }
-    
-    // Load TABLAT value
-    sendCoreInstr(0x0E00 | value);  // MOVLW val
-    sendCoreInstr(0x6EF5);          // MOVWF TABLAT
 
-    sendCoreInstr(WREN_SET);  // BSF EECON1, WREN
+    // 7. Physical delay for EEPROM cell chemistry
+    delay(10); 
 
-    
-    //sendTBLWT(TBLWRITE_PI_CMD);
-    send4Cmd(TBLWRITE_CMD);    // 0x0C
-    send8OperandZero();
-    send8OperandZero(); 
-    delayMicroseconds(50);
-
-    // Send Required unlock commands
-    sendCoreInstr(0x0E55);  // MOVLW 0x55
-    sendCoreInstr(0x6EA7);  // MOVWF EECON2
-    sendCoreInstr(0x0EAA);  // MOVLW 0xAA
-    sendCoreInstr(0x6EA7);  // MOVWF EECON2
-
-    // Start write by setting WR bit
-    sendCoreInstr(WR_SET);  // BSF EECON1, WR
-
-    // Wait at least 5ms
-    delay(10);
-
-    // Clear WREN bit
+    // 8. Disable Writes
     sendCoreInstr(WREN_CLEAR);
+}
+
+void bulkEraseEEPROM() {
+    
+    Serial.println("Performing EEPROM Bulk Erase...");
+    setTBLPTR(BULK_ERASE_ADDR1); //0x3C0005
+    send4Cmd(TBLWRITE_CMD);
+    send16Payload(0x0000);
+    delayMicroseconds(100);
+
+    setTBLPTR(BULK_ERASE_ADDR2); //0x3C0004
+    send4Cmd(TBLWRITE_CMD);
+    send16Payload(0x0084); //0x84 is 'key' for EEPROM erase
+    delayMicroseconds(100);
+
+    sendCoreInstr(0x0000); // NOP
+
+    pinMode(PIN_DATA, OUTPUT);
+    digitalWrite(PIN_DATA, LOW);
+    delay(15); 
+    
+    Serial.println("Bulk Erase Complete.");
 }
 
 void bulkErase(uint16_t key, uint32_t targetAddr, bool isConfig) {
@@ -607,12 +670,7 @@ void handleManualRead() {
 void handleTestErsWrtRd(uint8_t value, uint32_t addr) {
 
   enterProgramMode();
-  
-  Serial.print("Setting erase control register to 0x");
-  Serial.println(BULK_ERASE_ADDR1, HEX);
-  Serial.print("Using 'key' 0x");
-  Serial.println(EEPROM_ERASE_KEY, HEX);
-  bulkErase(EEPROM_ERASE_KEY, BULK_ERASE_ADDR1, TRUE);
+  //bulkEraseEEPROM();
 
   // Write value to address
   Serial.print("Writing 0x");
@@ -620,12 +678,76 @@ void handleTestErsWrtRd(uint8_t value, uint32_t addr) {
   Serial.print(" to Address 0x");
   Serial.println(addr, HEX);
   writeByte(addr, value);
+  delay(20);
 
   Serial.println("Verifying write was successful...");
-  verifyWrite(addr, value, USER_ID_BIT_MASK);
+  verifyWrite(addr, value, 0xFF);
 
   exitProgramMode();
 
+}
+
+void simpleWriteTest(uint32_t addr, uint8_t val) {
+  enterProgramMode(); 
+
+  // 1. Point to address
+  setTBLPTR(addr);
+
+  // 2. Load the byte into the TABLAT register (0xFF5)
+  // MOVLW val
+  sendCoreInstr(0x0E00 | val); 
+  // MOVWF TABLAT
+  sendCoreInstr(0x6EF5); 
+
+  // 3. Set EECON1 for Program/Config space
+  sendCoreInstr(0x8EA6); // BSF EECON1, EEPGD
+  sendCoreInstr(0x8CA6); // BSF EECON1, CFGS
+
+  // 4. Required: Perform a Table Write to "Latch" the data
+  // Even if we don't use the payload, the PIC needs to see the TBLWT command
+  send4Cmd(TBLWRITE_CMD); // 0x0C
+  send16Payload(0x0000); 
+
+  // 5. Enable Writes
+  sendCoreInstr(WREN_SET);
+
+  // 6. Unlock Sequence
+  sendCoreInstr(0x0E55); sendCoreInstr(0x6EA7);
+  sendCoreInstr(0x0EAA); sendCoreInstr(0x6EA7);
+
+  // 7. Start Write
+  sendCoreInstr(WR_SET);
+
+  // 8. CRITICAL: The PIC state machine requires PGC transitions to finish
+  // We'll send 20 NOPs to be absolutely sure
+  for(int i=0; i<20; i++) {
+    sendCoreInstr(0x0000); 
+  }
+
+  delay(25); // Wait for physical write
+  
+  sendCoreInstr(WREN_CLEAR);
+  exitProgramMode();
+  Serial.println("Explicit TABLAT Write Complete.");
+}
+
+void simpleReadBack(uint32_t addr) {
+  enterProgramMode();
+  setTBLPTR(addr);
+  
+  // Set EECON1 for Config/ID space
+  sendCoreInstr(0x8EA6); // BSF EECON1, EEPGD
+  sendCoreInstr(0x8CA6); // BSF EECON1, CFGS
+
+  // Command 0x08 is "Table Read" (No increment)
+  uint8_t result = tblRead(0x08); 
+  
+  exitProgramMode();
+  
+  Serial.print("Read back from 0x");
+  Serial.print(addr, HEX);
+  Serial.print(": 0x");
+  Serial.println(result, HEX);
 }
 
 // only runs once
@@ -681,7 +803,12 @@ void loop() {
 
       switch (input) {
 
-        case '1': handleTestErsWrtRd(0xA5, EEPROM_ADDR1); break; 
+        case '1': 
+          // Target User ID 0. This is the safest, most basic writeable byte.
+          simpleWriteTest(0x200000, 0xA5); 
+          delay(100);
+          simpleReadBack(0x200000); 
+        break; 
 
         case '2': handleReadAllConfig(config); break;
 
