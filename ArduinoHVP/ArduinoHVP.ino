@@ -86,45 +86,32 @@ static inline void setClkLow() {
 //Create and send 4 bit opcpde command
 //takes in a byte 'cmd' (i.e 0x00 or 0000 1101)
 void send4Cmd(uint8_t cmd){
-    
-    //Data is latched on falling edge of clock.
-    //Loop through 4 times by setting CLOCK HIGH and then
-    //writng DATA (LOW or HIGH) based on cmd arg
-    //Finally, latch DATA by writing CLOCK LOW
     pinMode(PIN_DATA, OUTPUT);
-
     for (uint8_t i = 0; i < 4; ++i) {
-      setClkHigh();
-      digitalWrite(PIN_DATA, (cmd & 1) ? HIGH : LOW); // send LSB first
-      setClkLow();
-      cmd >>= 1;
-  }
-  // Force the line low after the sequence
-  digitalWrite(PIN_DATA, LOW);
-  delayMicroseconds(50); // makes it clear when opcode is over and operand begins
+        setClkHigh();
+        digitalWrite(PIN_DATA, (cmd & 1) ? HIGH : LOW);
+        setClkLow();
+        cmd >>= 1;
+    }
+    digitalWrite(PIN_DATA, LOW);
+    delayMicroseconds(50); 
 }
 
 //Create and send 16 bit operand payload
 //takes in a two byte payload (i.e 0x0000)
 void send16Payload(uint16_t payload){
-    
-    //Data is latched on falling edge of clock.
-    //Loop through 4 times by setting CLOCK HIGH and then
-    //writng DATA (LOW or HIGH) based on cmd arg
-    //Finally, latch DATA by writing CLOCK LOW
     for (uint8_t i = 0; i < 16; ++i) {
-      setClkHigh();
-      if ((payload >> i) & 0x01) {
+        setClkHigh();
+        if ((payload >> i) & 0x01) {
             digitalWrite(PIN_DATA, HIGH);
         } else {
             digitalWrite(PIN_DATA, LOW);
         }
         delayMicroseconds(DELAY_TDLY1);
         setClkLow();
-  }
-  // Force the line low after the sequence
-  digitalWrite(PIN_DATA, LOW);
-  delayMicroseconds(50); // makes it clear when operand is over and opcode begins
+    }
+    digitalWrite(PIN_DATA, LOW);
+    delayMicroseconds(50);
 }
 
 // Send 8 zero operand clocks for TBLWT
@@ -493,12 +480,15 @@ void eraseEverything() {
 
     // --- STEP 3: Execute Erase ---
     sendCoreInstr(0x0000);     // NOP (Starts the internal erase)
-    
+
     // Hold PGD low and wait for the hardware to finish
     pinMode(PIN_DATA, OUTPUT);
     digitalWrite(PIN_DATA, LOW);
-    delay(500); 
 
+    for(int i = 0; i < 1000; i++) {
+        send16Payload(0x0000); 
+    }
+    
     exitProgramMode();
     Serial.println("Chip erase sequence complete.");
 }
@@ -687,46 +677,92 @@ void handleTestErsWrtRd(uint8_t value, uint32_t addr) {
 
 }
 
+void readEECON1() {
+  enterProgramMode(); // CRITICAL: PIC must be in programming mode
+
+  // 1. Force the PIC to Register Mode (Clear EEPGD and CFGS)
+  sendCoreInstr(0x9EA6); // BCF EECON1, EEPGD
+  sendCoreInstr(0x9CA6); // BCF EECON1, CFGS
+  
+  // 2. Point to EECON1 address
+  setTBLPTR(0x000FA6); 
+  
+  // 3. Initiate Table Read
+  send4Cmd(0x08); // TBLRD*
+  send8OperandZero();
+  
+  pinMode(PIN_DATA, INPUT);
+  delayMicroseconds(100);
+  
+  uint8_t status = 0;
+  for (int i = 0; i < 8; i++) {
+      digitalWrite(PIN_CLOCK, HIGH);
+      delayMicroseconds(20); 
+      if (digitalRead(PIN_DATA)) status |= (1 << i);
+      digitalWrite(PIN_CLOCK, LOW);
+      delayMicroseconds(20);
+  }
+  pinMode(PIN_DATA, OUTPUT);
+
+  // 4. Print the diagnostics
+  Serial.print("--- EECON1 Manual Read: 0x");
+  Serial.print(status, HEX);
+  Serial.println(" ---");
+  
+  if (status == 0xFF) {
+      Serial.println("Error: Bus Floating (Still reading 0xFF)");
+  } else {
+      Serial.print("WREN Bit: "); Serial.println((status & 0x04) ? "SET" : "CLEARED");
+      Serial.print("WR Bit:   "); Serial.println((status & 0x02) ? "SET (Busy)" : "CLEARED (Idle)");
+  }
+
+  exitProgramMode();
+}
+
 void simpleWriteTest(uint32_t addr, uint8_t val) {
   enterProgramMode(); 
 
-  // 1. Point to address
-  setTBLPTR(addr);
-
-  // 2. Load the byte into the TABLAT register (0xFF5)
-  // MOVLW val
-  sendCoreInstr(0x0E00 | val); 
-  // MOVWF TABLAT
-  sendCoreInstr(0x6EF5); 
-
-  // 3. Set EECON1 for Program/Config space
   sendCoreInstr(0x8EA6); // BSF EECON1, EEPGD
   sendCoreInstr(0x8CA6); // BSF EECON1, CFGS
+  sendCoreInstr(0x98A6); // BCF EECON1, FREE (Ensure we are writing, not erasing)
+  sendCoreInstr(0x84A6); // WREN SET
 
-  // 4. Required: Perform a Table Write to "Latch" the data
-  // Even if we don't use the payload, the PIC needs to see the TBLWT command
-  send4Cmd(TBLWRITE_CMD); // 0x0C
-  send16Payload(0x0000); 
-
-  // 5. Enable Writes
-  sendCoreInstr(WREN_SET);
-
-  // 6. Unlock Sequence
+  setTBLPTR(addr);
+  send4Cmd(0x0C); // 0x0C
+  send16Payload(val); 
+  
   sendCoreInstr(0x0E55); sendCoreInstr(0x6EA7);
   sendCoreInstr(0x0EAA); sendCoreInstr(0x6EA7);
 
   // 7. Start Write
-  sendCoreInstr(WR_SET);
+  sendCoreInstr(0x82A6);
+  delayMicroseconds(10); // Give the command a moment to latch
 
   // 8. CRITICAL: The PIC state machine requires PGC transitions to finish
   // We'll send 20 NOPs to be absolutely sure
-  for(int i=0; i<20; i++) {
-    sendCoreInstr(0x0000); 
+  for(int i=0; i<2000; i++) {
+    send4Cmd(0x00); 
+    send16Payload(0x0000);
   }
 
-  delay(25); // Wait for physical write
+  // 5. DIAGNOSTIC: Switch to SFR Mapping to check WR bit
+  // We MUST clear these to see the EECON1 register at 0xFA6
+  sendCoreInstr(0x9EA6); // BCF EECON1, EEPGD
+  sendCoreInstr(0x9CA6); // BCF EECON1, CFGS
   
-  sendCoreInstr(WREN_CLEAR);
+  setTBLPTR(0xFA6);      // EECON1 address
+  uint8_t status = tblRead(0x08); 
+  
+  Serial.print("EECON1 Status: 0x");
+  Serial.println(status, HEX);
+
+  if (status & 0x02) {
+      Serial.println("WR bit is STILL SET. Write failed to complete.");
+  } else {
+      Serial.println("WR bit cleared. Write successful!");
+  }
+
+  sendCoreInstr(0x94A6); // WREN = 0
   exitProgramMode();
   Serial.println("Explicit TABLAT Write Complete.");
 }
@@ -740,7 +776,7 @@ void simpleReadBack(uint32_t addr) {
   sendCoreInstr(0x8CA6); // BSF EECON1, CFGS
 
   // Command 0x08 is "Table Read" (No increment)
-  uint8_t result = tblRead(0x08); 
+  uint8_t result = tblRead(0x09); 
   
   exitProgramMode();
   
@@ -805,9 +841,12 @@ void loop() {
 
         case '1': 
           // Target User ID 0. This is the safest, most basic writeable byte.
-          simpleWriteTest(0x200000, 0xA5); 
-          delay(100);
-          simpleReadBack(0x200000); 
+//          simpleWriteTest(0x200000, 0xA5);
+//          delay(100);
+//          simpleReadBack(0x200000);
+            readEECON1();
+          
+// If bit 1 of the result is 1, the write is still "Active" 
         break; 
 
         case '2': handleReadAllConfig(config); break;
@@ -824,7 +863,10 @@ void loop() {
 
         case '8': eraseEverything(); break;
 
-        case '9': nakedConfigRead(); break;
+        case '9': 
+          handleTestVdd();
+          //nakedConfigRead(); 
+          break;
 
         default:
           // Should never reach here because of the range check
