@@ -257,25 +257,29 @@ void enterProgramMode() {
   pinMode(PIN_MCLR, OUTPUT);
   pinMode(PIN_DATA, OUTPUT);
   pinMode(PIN_CLOCK, OUTPUT);
+  pinMode(PIN_VDD, OUTPUT);
   digitalWrite(PIN_MCLR, LOW);
   digitalWrite(PIN_DATA, LOW);
   digitalWrite(PIN_CLOCK, LOW);
+  digitalWrite(PIN_VDD, LOW);
 
   // Wait for the lines to settle.
-  delayMicroseconds(200);
+  delay(500);
 
-  digitalWrite(PIN_MCLR, HIGH);
+  // VDD first, then MCLR
+  digitalWrite(PIN_VDD, HIGH);
   delayMicroseconds(10);
-  
-  // Switch DATA and CLOCK into outputs.
-  pinMode(PIN_DATA, OUTPUT);
-  pinMode(PIN_CLOCK, OUTPUT);
+  digitalWrite(PIN_MCLR, HIGH);
+
+  delay(10);
+
 }
 
 void exitProgramMode() {
 
     // Lower MCLR, VDD, DATA, and CLOCK.
     digitalWrite(PIN_MCLR, LOW);
+    digitalWrite(PIN_VDD, LOW);
     delay(1);
     
     // Clear the lines
@@ -678,44 +682,24 @@ void handleTestErsWrtRd(uint8_t value, uint32_t addr) {
 }
 
 void readEECON1() {
-  enterProgramMode(); // CRITICAL: PIC must be in programming mode
-
-  // 1. Force the PIC to Register Mode (Clear EEPGD and CFGS)
-  sendCoreInstr(0x9EA6); // BCF EECON1, EEPGD
-  sendCoreInstr(0x9CA6); // BCF EECON1, CFGS
+  enterProgramMode();
+          
+  sendCoreInstr(0x84A6);
+  sendCoreInstr(0x50A6);
+  sendCoreInstr(0x6EF5);
   
-  // 2. Point to EECON1 address
-  setTBLPTR(0x000FA6); 
+  uint8_t status1 = tblRead(0x08); // TBLRD*
+  Serial.print("WREN Set Test: 0x");
+  Serial.println(status1, HEX);
   
-  // 3. Initiate Table Read
-  send4Cmd(0x08); // TBLRD*
-  send8OperandZero();
+  sendCoreInstr(0x94A6);
+  sendCoreInstr(0x50A6);
+  sendCoreInstr(0x6EF5);
   
-  pinMode(PIN_DATA, INPUT);
-  delayMicroseconds(100);
+  uint8_t status2 = tblRead(0x08); // TBLRD*
+  Serial.print("WREN Set Test: 0x");
+  Serial.println(status2, HEX);
   
-  uint8_t status = 0;
-  for (int i = 0; i < 8; i++) {
-      digitalWrite(PIN_CLOCK, HIGH);
-      delayMicroseconds(20); 
-      if (digitalRead(PIN_DATA)) status |= (1 << i);
-      digitalWrite(PIN_CLOCK, LOW);
-      delayMicroseconds(20);
-  }
-  pinMode(PIN_DATA, OUTPUT);
-
-  // 4. Print the diagnostics
-  Serial.print("--- EECON1 Manual Read: 0x");
-  Serial.print(status, HEX);
-  Serial.println(" ---");
-  
-  if (status == 0xFF) {
-      Serial.println("Error: Bus Floating (Still reading 0xFF)");
-  } else {
-      Serial.print("WREN Bit: "); Serial.println((status & 0x04) ? "SET" : "CLEARED");
-      Serial.print("WR Bit:   "); Serial.println((status & 0x02) ? "SET (Busy)" : "CLEARED (Idle)");
-  }
-
   exitProgramMode();
 }
 
@@ -818,6 +802,8 @@ void loop() {
   
   unsigned long startTime;
   unsigned long elapsedTime;
+  uint8_t status1 = 0;
+  uint8_t status2 = 0;
 
   if (Serial.available() > 0) {
 
@@ -839,15 +825,7 @@ void loop() {
 
       switch (input) {
 
-        case '1': 
-          // Target User ID 0. This is the safest, most basic writeable byte.
-//          simpleWriteTest(0x200000, 0xA5);
-//          delay(100);
-//          simpleReadBack(0x200000);
-            readEECON1();
-          
-// If bit 1 of the result is 1, the write is still "Active" 
-        break; 
+        case '1': readEECON1(); break;
 
         case '2': handleReadAllConfig(config); break;
 
