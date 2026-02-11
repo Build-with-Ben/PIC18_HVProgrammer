@@ -8,7 +8,8 @@
 #define  CONFIG1L_ADDR        0x300000   // CONFIG1L register address
 #define  CONFIG1H_ADDR        0x300001   // CONFIG1L register address
 #define  USER_ID_ADDR         0x200000   // User ID address used for testing
-#define  EEPROM_ADDR1         0xF00000   // Start of EEPROM memory
+#define  EEPROM_ADDR          0xF00000   // Start of EEPROM memory
+#define  EECON1_ADDR          0x000FA6   // Start of EECON1 register
 
 // --------------------- Bulk Erase Keys ------------------------
 #define  CONFIG_ERASE_KEY     0x82       // Erase key for configuration bits
@@ -38,6 +39,7 @@
 // ------------------- 4-bit Commands --------------------------
 #define  TBLWRITE_CMD        0x0C        // Table Write 4 bit command (bin 1100)
 #define  TBLWRITE_PI_CMD     0x0D        // Table Write Post Increment (bin 1101)
+#define  TBLWRITE_START_CMD  0x0F        // Table Write Start Programming (bin 1111)
 #define  TBLREAD_PI_CMD      0x09        // Table Read Post Increment 4 bit command(bin 1001)
 #define  TBLREAD_CMD         0x08        // Table Read No pre or post inc/dec
 #define  COREINSTR_CMD       0x00        // Core instruction 4 bit command (bin 0000)
@@ -98,7 +100,7 @@ void send4Cmd(uint8_t cmd){
         cmd >>= 1;
     }
     digitalWrite(PIN_DATA, LOW);
-    delayMicroseconds(50); 
+    delayMicroseconds(50); // delay to differeniate between opcode and payload
 }
 
 //Create and send 16 bit operand payload
@@ -115,7 +117,7 @@ void send16Payload(uint16_t payload){
         setClkLow();
     }
     digitalWrite(PIN_DATA, LOW);
-    delayMicroseconds(50);
+    delayMicroseconds(50); // delay to differeniate payload and SoF
 }
 
 // Send 8 zero operand clocks for TBLWT
@@ -130,6 +132,44 @@ static inline void send8OperandZero() {
     delayMicroseconds(DELAY_TDLY1); // After writing 8 dummy bits, 
   }
 }
+
+// Unlock sequence needed for writes
+void hwUnlock(){
+  sendCoreInstr(0x0E55); // MOVLW 0x55
+  sendCoreInstr(0x6EA7); // MOVWF EECON2
+  sendCoreInstr(0x0EAA); // MOVLW 0xAA
+  sendCoreInstr(0x6EA7); // MOVWF EECON2
+}
+
+// Sets EECON1 bits based on target location and enables writes 
+void cfgEECON1Bits (uint32_t addr) {
+
+    sendCoreInstr(WREN_CLEAR); // force a clear to be safe
+
+    if (addr >= EEPROM_ADDR) {
+        sendCoreInstr(EEPGD_CLEAR);
+        sendCoreInstr(CFGS_CLEAR); 
+    } 
+    else if (addr >= CONFIG_ADDR){
+        sendCoreInstr(EEPGD_SET);
+        sendCoreInstr(CFGS_SET);
+    }
+    else if (addr >= USER_ID_ADDR) {
+        sendCoreInstr(EEPGD_SET);
+        sendCoreInstr(CFGS_CLEAR);
+    } 
+    else {
+        sendCoreInstr(EEPGD_SET);
+        sendCoreInstr(CFGS_CLEAR);
+    }
+
+    sendCoreInstr(WREN_SET); // enable writes
+}
+
+//  sendCoreInstr(WREN_CLEAR); // BCF EECON1, WREN  (Set to 0) - reset to idle state
+//  sendCoreInstr(EEPGD_SET); // BSF EECON1, EEPGD (Set to 1) - point to flash memory
+//  sendCoreInstr(CFGS_CLEAR); // BCF EECON1, CFGS  (Set to 0) - point to flash/eeprom
+//  sendCoreInstr(WREN_SET); // BSF EECON1, WREN  (Set to 1) - prime uC for writing
 
 // Send a Table Write 4-bit 'cmd' plus operand clocks
 // Must pass in a valid table write command
@@ -210,17 +250,11 @@ static uint8_t tblRead(uint8_t cmd) {
     if (digitalRead(PIN_DATA)){ //if HIGH, set corresponding bit in b
       b |= (1u << i);
     }
-    //setClkLow();
-    //delayMicroseconds(100); // Stability delay
   }
 
   // Reset Data line
   pinMode(PIN_DATA, OUTPUT);
   digitalWrite(PIN_DATA, LOW);
-  
-  Serial.println("Reading table pointer...");
-  Serial.print("Pointer value = 0x");
-  Serial.println(b, HEX);
 
   // Add 0.5 ms delay before next command for easier debugging
   delayMicroseconds(500);  // 0.5 millisecond
@@ -230,7 +264,7 @@ static uint8_t tblRead(uint8_t cmd) {
 
 int i;
 
-// Read the 14 configuration bytes at 0x300000..0x30000D into 'out'.
+// Read the 14 configuration bytes at 0x300000...0x30000D into 'bytes'.
 // Returns number of bytes read.
 size_t readAllConfigBytes(uint8_t* bytes) {
   
@@ -302,13 +336,21 @@ void printMenu() {
   Serial.println("2 - Read All Configuration Bits");
   Serial.println("3 - Enable Low Voltage Programming");
   Serial.println("4 - Read Specific Register");
-  Serial.println("5 - Get Device ID");
-  Serial.println("6 - Test VDD Write");
-  Serial.println("7 - Test MCLR Write");
+  Serial.println("5 - Write Specific Register");
+  Serial.println("6 - Get Device ID");
+  Serial.println("7 - Test/Debug Menu");
   Serial.println("8 - Erase everything!");
   Serial.println("9 - Erase Specific Register");
   Serial.println();
 }
+
+void printTestMenu() {
+  Serial.println("Enter one of the following values to execute a test sequence:");
+  Serial.println("1 - Test VDD Write");
+  Serial.println("2 - Test MCLR Write");
+  Serial.println();
+}
+
 
 /*
  * Write a single byte of 'value' to address 'addr' by....
@@ -403,18 +445,28 @@ void writeByte(uint32_t addr, uint8_t value)
     sendCoreInstr(WREN_CLEAR);
 }
 
-uint16_t prepareErase(uint32_t address) {
+uint16_t prepareEraseKey(uint32_t address) {  
 
-    sendCoreInstr(0x8CA6); // BSF EECON1, CFGS
-    sendCoreInstr(0x9EA6); // BCF EECON1, EEPGD   
-
-    if (address < 0x300000) {
-      Serial.println("Erase Mode: Entire Flash Memory");
-      return 0x8F8F;        
+    Serial.println("Selecting Erase Mode...");
+    if (address >= 0xF00000) {
+      Serial.println("Erase Mode: EEPROM Memory");
+      return 0x0084;        
     } 
-    else if (address >= 0x200000 && address <= 0x30000D) {
-        Serial.println("Erase Mode: User IDs and Config Bits");
-        return 0x4F4F;  
+    else if (address >= 0x300000){
+      Serial.println("Erase Mode: Configuration Memory");
+      return 0x0082;  
+    }
+    else if (address >= 0x200000) {
+        Serial.println("Erase Mode: User IDs");
+        return 0x0088;  
+    }
+    else if (address == 0xFFFFFF) {
+        Serial.println("Erase Mode: Full Chip");
+        return 0x0F8F;  
+    }
+    else {
+      Serial.println("Erase Mode: Full Chip");
+      return 0x0F8F;
     }
 
     return 0x0000;
@@ -422,30 +474,27 @@ uint16_t prepareErase(uint32_t address) {
 
 void bulkErase(uint32_t targetAddr) {
 
+    //Prepare EECON1 bits based on address
+    cfgEECON1Bits(targetAddr);
+    
     // Prepare erase based on address
-    uint16_t eraseKey = prepareErase(targetAddr);
+    uint16_t eraseKey = prepareEraseKey(targetAddr);
 
     if (eraseKey == 0x0000) {
         Serial.println("Error: Invalid Erase Address");
         return;
     }
 
-    //DEBUG: Remove later
-    sendCoreInstr(0x8CA6); // BSF EECON1, CFGS
-    sendCoreInstr(0x9EA6); // BCF EECON1, EEPGD
-
-
     // Write first unlock key
-    setTBLPTR(0x3C0005);
-    send4Cmd(0x0C);        // Command 1100 (Table Write)
-    send16Payload(0x0F0F);
+    setTBLPTR(BULK_ERASE_ADDR1);
+    send4Cmd(TBLWRITE_CMD);          // Command 1100 (Table Write)
+    send16Payload(eraseKey >> 8);    // Send first byte of key
     delayMicroseconds(100);
  
-
     // Write specific region key
-    setTBLPTR(0x3C0004);
-    send4Cmd(0x0C);        // Command 1100 (Table Write)
-    send16Payload(eraseKey);
+    setTBLPTR(BULK_ERASE_ADDR2);
+    send4Cmd(TBLWRITE_CMD);          // Command 1100 (Table Write)
+    send16Payload(eraseKey & 0xFF);  // Send second byte of key
     delayMicroseconds(100);
 
     // NOP triggers start
@@ -463,7 +512,7 @@ void bulkErase(uint32_t targetAddr) {
     // Wait for Erase Time (typically 5ms-10ms)
     delay(15);
     
-    Serial.println("Bulk Erase Complete.");
+    Serial.println("Erase Complete.");
 }
 
 void eraseEverything() {
@@ -665,12 +714,23 @@ void handleManualRead() {
   exitProgramMode();
 }
 
+void handleManualWrite(){
+  
+}
+
 void handleTestErsWrtRd() {
 
+  uint8_t testVal = 0x00A1;
+  uint32_t testAddr = 0x200000;
+  
+  Serial.println("Testing Erase, Write, and Read");
   enterProgramMode();
-  bulkErase(0x200000); // erases
-  writeUserID(); // Writes 0xA5 to 0x200000
-  simpleReadBack(0x200000); // reads 0x20000
+  bulkErase(testAddr); // erases test address
+  testWrite(testVal, testAddr); // Writes value to test address
+  uint8_t result = simpleReadBack(testAddr); // reads test address
+  if (result == testVal){
+    Serial.println("Write Sucessfull!");
+  }
   exitProgramMode();
 
 }
@@ -704,35 +764,64 @@ void handleManualErase(){
   exitProgramMode();
 }
 
-void writeUserID() {
-          
-  Serial.println("Writing 0xA5 to User ID register 0x200000");
+void handleTestOptions (){
+    
+    printTestMenu();
   
-  // HARD RESET of EECON1 (Ensures the state machine is at 'Idle')
-  sendCoreInstr(0x94A6); // BCF EECON1, WREN  (Set to 0)
-  sendCoreInstr(0x8EA6); // BCF EECON1, EEPGD (Set to 0)
-  sendCoreInstr(0x9CA6); // BCF EECON1, CFGS  (Set to 0)
-  sendCoreInstr(0x84A6); // BCF EECON1, WREN  (Set to 0)
+    if (Serial.available() > 0) {
+    
+      // Read a full line and trim CR/LF so newline characters
+      // sent by the Serial Monitor don't get interpreted as commands.
+      String line = Serial.readStringUntil('\n');
+      line.trim(); // removes leading/trailing whitespace including '\r'
+  
+      if (line.length() == 0) {
+        // empty line (only newline/CR was sent) — skip processing
+        return;
+      }
+
+      char input = line.charAt(0);
+      
+      if (input >= '1' && input <= '2') {
+        switch (input){
+        case '1': handleTestMCLR(); break;
+        case '2': handleTestVdd(); break;
+        break;
+      }
+    } 
+  }
+}
+
+// Configures write bits, Loads 0xA5 into TABLAT, and Starts Write Sequence
+void testWrite(uint16_t val, uint32_t addr) {
+          
+  Serial.print("Writing 0x");
+  Serial.print(val, HEX);
+  Serial.print(" to register 0x");
+  Serial.print(addr, HEX);
+  Serial.println("...");
+  
+  cfgEECON1Bits(addr); // configure EECON1 bits for 0x200000
   delayMicroseconds(100);
   
   // Set pointer to User ID address
-  setTBLPTR(0x200000);   
-  send4Cmd(0x0D); 
-  send16Payload(0x00A5);
+  setTBLPTR(USER_ID_ADDR);   
+  
+  // Write 0xA5 to pointer location
+  send4Cmd(TBLWRITE_PI_CMD); 
+  send16Payload(val);
 
-  // Triger write cycle to "burn" it
-  send4Cmd(0x0F); 
-  send16Payload(0x0000); 
+  // Triger start of write cycle
+  send4Cmd(TBLWRITE_START_CMD); 
+  send16Payload(0x0000); // Send zeros as payload
 
-  // 4. Hardware Unlock Sequence (Required to set the WR bit)
-  sendCoreInstr(0x0E55); // MOVLW 0x55
-  sendCoreInstr(0x6EA7); // MOVWF EECON2
-  sendCoreInstr(0x0EAA); // MOVLW 0xAA
-  sendCoreInstr(0x6EA7); // MOVWF EECON2
+  // Hardware Unlock Sequence (Required to set the WR bit)
+  hwUnlock();
 
-  // 5. Fire the Write
-  sendCoreInstr(0x82A6); // BSF EECON1, WR
+  // Trigger the actual Write
+  sendCoreInstr(WR_SET); // BSF EECON1, WR
 
+  // Force data line LOW
   pinMode(PIN_DATA, OUTPUT);
   digitalWrite(PIN_DATA, LOW);
 
@@ -744,67 +833,15 @@ void writeUserID() {
     delayMicroseconds(1);
   }
   delay(5);
-  sendCoreInstr(0x94A6); // BCF WREN (Safety)
-
-  setTBLPTR(0x000FA6);   // Address of EECON1
-  sendCoreInstr(0x9EA6); // BCF EECON1, EEPGD (Switch to SFR mapping)
-  sendCoreInstr(0x9CA6); // BCF EECON1, CFGS
-  uint8_t eecon1_val = tblRead(0x08);
-
-  Serial.print("DIAGNOSTIC - EECON1 is: 0x");
-  Serial.println(eecon1_val, HEX);
-
+  
+  // Clear bits for next operation
+  sendCoreInstr(WREN_CLEAR); 
+  setTBLPTR(EECON1_ADDR);   
+  sendCoreInstr(EEPGD_CLEAR);
+  sendCoreInstr(CFGS_CLEAR); 
 }
 
-void simpleWriteTest(uint32_t addr, uint8_t val) {
-  enterProgramMode(); 
-
-  sendCoreInstr(0x8EA6); // BSF EECON1, EEPGD
-  sendCoreInstr(0x8CA6); // BSF EECON1, CFGS
-  sendCoreInstr(0x98A6); // BCF EECON1, FREE (Ensure we are writing, not erasing)
-  sendCoreInstr(0x84A6); // WREN SET
-
-  setTBLPTR(addr);
-  send4Cmd(0x0C); // 0x0C
-  send16Payload(val); 
-  
-  sendCoreInstr(0x0E55); sendCoreInstr(0x6EA7);
-  sendCoreInstr(0x0EAA); sendCoreInstr(0x6EA7);
-
-  // 7. Start Write
-  sendCoreInstr(0x82A6);
-  delayMicroseconds(10); // Give the command a moment to latch
-
-  // 8. CRITICAL: The PIC state machine requires PGC transitions to finish
-  // We'll send 20 NOPs to be absolutely sure
-  for(int i=0; i<2000; i++) {
-    send4Cmd(0x00); 
-    send16Payload(0x0000);
-  }
-
-  // 5. DIAGNOSTIC: Switch to SFR Mapping to check WR bit
-  // We MUST clear these to see the EECON1 register at 0xFA6
-  sendCoreInstr(0x9EA6); // BCF EECON1, EEPGD
-  sendCoreInstr(0x9CA6); // BCF EECON1, CFGS
-  
-  setTBLPTR(0xFA6);      // EECON1 address
-  uint8_t status = tblRead(0x08); 
-  
-  Serial.print("EECON1 Status: 0x");
-  Serial.println(status, HEX);
-
-  if (status & 0x02) {
-      Serial.println("WR bit is STILL SET. Write failed to complete.");
-  } else {
-      Serial.println("WR bit cleared. Write successful!");
-  }
-
-  sendCoreInstr(0x94A6); // WREN = 0
-  exitProgramMode();
-  Serial.println("Explicit TABLAT Write Complete.");
-}
-
-void simpleReadBack(uint32_t addr) {
+static simpleReadBack(uint32_t addr) {
   
   setTBLPTR(addr);
   sendCoreInstr(0x8EA6); // BSF EECON1, EEPGD
@@ -819,10 +856,13 @@ void simpleReadBack(uint32_t addr) {
   uint8_t result = tblRead(0x08); 
 
   // Print to terminal
-  Serial.print("Value at register 0x");
+  Serial.println("Verifying write...");
+  Serial.print("New value at 0x");
   Serial.print(addr, HEX);
-  Serial.print("= 0x");
+  Serial.print(" = 0x");
   Serial.println(result, HEX);
+
+  return result;
 }
 
 // only runs once
@@ -880,27 +920,19 @@ void loop() {
 
       switch (input) {
 
-        case '1': handleTestErsWrtRd(); 
-          //enterProgramMode();
-          //sendCoreInstr(0x9EA6); // EEPGD = 0
-          //sendCoreInstr(0x9CA6); // CFGS = 0
-          //delayMicroseconds(100);
-          //writeUserID();
-          //exitProgramMode();
-        
-        break;
+        case '1': handleTestErsWrtRd(); break;
 
         case '2': handleReadAllConfig(config); break;
 
         case '3': handleEnableLVP(); break;
 
         case '4': handleManualRead(); break;
-
-        case '5': handleReadDeviceID(); break;
         
-        case '6': handleTestVdd(); break;
+        case '5': handleManualWrite(); break;
 
-        case '7': handleTestMCLR(); break;
+        case '6': handleReadDeviceID(); break;
+
+        case '7': handleTestOptions(); break;
 
         case '8': eraseEverything(); break;
 
