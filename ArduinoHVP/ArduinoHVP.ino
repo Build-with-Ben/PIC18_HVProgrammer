@@ -1,4 +1,5 @@
 #pragma  GCC optimize ("O0")
+uint8_t lastResetCause __attribute__((section(".noinit")));  // survive soft resets
 
 // ------------------- Various memory addresses ----------------
 #define  CONFIG_ADDR          0x300000   // CONFIG register addresses 0x300000..0x30000D
@@ -68,6 +69,13 @@
 uint8_t dataBit = 0;
 static uint8_t config[CONFIG_BYTES_TO_READ];
 static uint8_t bBuffer[64];
+extern unsigned int __heap_start;
+extern void *__brkval;
+
+int freeMemory() {
+  int v;
+  return (int)&v - (__brkval == 0 ? (int)&__heap_start : (int)__brkval);
+}
 
 enum MemorySpace { 
   FLASH_ID, 
@@ -271,7 +279,7 @@ static void sendTBLWT(uint8_t cmd) {
 }
 
 // Read a single config byte at addr (assumes program mode already entered)
-static readSingleByte(uint32_t addr) {
+static uint8_t readSingleByte(uint32_t addr) {
 
     setTBLPTR(addr);
     
@@ -439,37 +447,37 @@ void exitProgramMode() {
 }
 
 void printMenu() {
-  Serial.println("Enter one of the following values to execute a programming sequence:");
-  Serial.println("1 - Test Erase, Write, and Read");
-  Serial.println("2 - Read All Configuration Bits");
-  Serial.println("3 - Enable Low Voltage Programming");
-  Serial.println("4 - Read Specific Register");
-  Serial.println("5 - Write Specific Register");
-  Serial.println("6 - Get Device ID");
-  Serial.println("7 - Test/Debug Menu");
-  Serial.println("8 - Erase everything!");
-  Serial.println("9 - Erase Specific Register");
+  Serial.println(F("Enter one of the following values to execute a programming sequence:"));
+  Serial.println(F("1 - Test Erase, Write, and Read"));
+  Serial.println(F("2 - Read All Configuration Bits"));
+  Serial.println(F("3 - Enable Low Voltage Programming"));
+  Serial.println(F("4 - Read Specific Register"));
+  Serial.println(F("5 - Write Specific Register"));
+  Serial.println(F("6 - Get Device ID"));
+  Serial.println(F("7 - Test/Debug Menu"));
+  Serial.println(F("8 - Erase everything!"));
+  Serial.println(F("9 - Erase Specific Register"));
   Serial.println();
-  Serial.println("Press q or Q at anytime to return to this menu");
+  Serial.println(F("Press q or Q at anytime to return to this menu"));
   Serial.println();
 }
 
 void printTestMenu() {
-  Serial.println("Enter one of the following values to execute a test sequence:");
-  Serial.println("1 - Test VDD Write");
-  Serial.println("2 - Test MCLR Write");
+  Serial.println(F("Enter one of the following values to execute a test sequence:"));
+  Serial.println(F("1 - Test VDD Write"));
+  Serial.println(F("2 - Test MCLR Write"));
   Serial.println();
-  Serial.println("Press q or Q at anytime to return to the main menu");
+  Serial.println(F("Press q or Q at anytime to return to the main menu"));
   Serial.println();
 
 }
 
 void printReadMenu(){
-  Serial.println("Enter one of the following values to execute a read sequence:");
-  Serial.println("1 - Read Single Register");
-  Serial.println("2 - Read Register Block");
+  Serial.println(F("Enter one of the following values to execute a read sequence:"));
+  Serial.println(F("1 - Read Single Register"));
+  Serial.println(F("2 - Read Register Block"));
   Serial.println(); 
-  Serial.println("Press q or Q at anytime to return to the main menu");
+  Serial.println(F("Press q or Q at anytime to return to the main menu"));
   Serial.println();
 
 }
@@ -515,48 +523,48 @@ uint16_t prepareEraseKey(uint32_t address) {
 }
 
 // Erases specific memory bank based on address
-void bulkErase(uint32_t targetAddr) {
-
-    //Prepare EECON1 bits based on address
-    cfgEECON1Bits(targetAddr);
-    
-    // Prepare erase based on address
-    uint16_t eraseKey = prepareEraseKey(targetAddr);
-
-    if (eraseKey == 0x0000) {
-        Serial.println("Error: Invalid Erase Address");
-        return;
-    }
-
-    // Write first unlock key
-    setTBLPTR(BULK_ERASE_ADDR1);
-    send4Cmd(TBLWRITE_CMD);          // Command 1100 (Table Write)
-    send16Payload(eraseKey >> 8);    // Send first byte of key
-    delayMicroseconds(100);
- 
-    // Write specific region key
-    setTBLPTR(BULK_ERASE_ADDR2);
-    send4Cmd(TBLWRITE_CMD);          // Command 1100 (Table Write)
-    send16Payload(eraseKey & 0xFF);  // Send second byte of key
-    delayMicroseconds(100);
-
-    // NOP triggers start
-    sendCoreInstr(0x0000); // Command 0000 (Core Instruction)
-
-    // Force data line low while erasing
-    pinMode(PIN_DATA, OUTPUT);
-    digitalWrite(PIN_DATA, LOW);
-
-    // Send clocks during erase (Required for P11 time)
-    for(int i = 0; i < 1000; i++) {
-        send16Payload(0x0000); 
-    }
-
-    // Wait for Erase Time (typically 5ms-10ms)
-    delay(15);
-    
-    Serial.println("Erase Complete.");
-}
+//void bulkErase(uint32_t targetAddr) {
+//
+//    //Prepare EECON1 bits based on address
+//    cfgEECON1Bits(targetAddr);
+//    
+//    // Prepare erase based on address
+//    uint16_t eraseKey = prepareEraseKey(targetAddr);
+//
+//    if (eraseKey == 0x0000) {
+//        Serial.println("Error: Invalid Erase Address");
+//        return;
+//    }
+//
+//    // Write first unlock key
+//    setTBLPTR(BULK_ERASE_ADDR1);
+//    send4Cmd(TBLWRITE_CMD);          // Command 1100 (Table Write)
+//    send16Payload(eraseKey >> 8);    // Send first byte of key
+//    delayMicroseconds(100);
+// 
+//    // Write specific region key
+//    setTBLPTR(BULK_ERASE_ADDR2);
+//    send4Cmd(TBLWRITE_CMD);          // Command 1100 (Table Write)
+//    send16Payload(eraseKey & 0xFF);  // Send second byte of key
+//    delayMicroseconds(100);
+//
+//    // NOP triggers start
+//    sendCoreInstr(0x0000); // Command 0000 (Core Instruction)
+//
+//    // Force data line low while erasing
+//    pinMode(PIN_DATA, OUTPUT);
+//    digitalWrite(PIN_DATA, LOW);
+//
+//    // Send clocks during erase (Required for P11 time)
+//    for(int i = 0; i < 1000; i++) {
+//        send16Payload(0x0000); 
+//    }
+//
+//    // Wait for Erase Time (typically 5ms-10ms)
+//    delay(15);
+//    
+//    Serial.println("Erase Complete.");
+//}
 
 void eraseEverything() {
     
@@ -595,17 +603,6 @@ void eraseEverything() {
     Serial.println("Chip erase sequence complete.");
 }
 
-//void verifyWrite(uint32_t addr, uint8_t expected, uint8_t mask){
-//  
-//    //Verify write was successful
-//    uint8_t actual = readSingleByte(addr);
-//    if ((actual & mask) != (expected & mask)) {
-//      Serial.println("Write verification FAILED");
-//    } else {
-//      Serial.println("Write verified OK");
-//    }
-//}
-
 // --------------------- Menu Option Handlers -----------------
 
 void handleReadDeviceID()
@@ -629,22 +626,22 @@ void handleReadDeviceID()
 
     exitProgramMode();
 
-    Serial.print("Device ID Low  (DEVIDL) = 0x");
+    Serial.print(F("Device ID Low  (DEVIDL) = 0x"));
     Serial.println(devidL, HEX);
-    Serial.print("Device ID High (DEVIDH) = 0x");
+    Serial.print(F("Device ID High (DEVIDH) = 0x"));
     Serial.println(devidH, HEX);
 
     uint16_t fullID = ((uint16_t)devidH << 8) | devidL;
 
-    Serial.print("Full Device ID = 0x");
+    Serial.print(F("Full Device ID = 0x"));
     Serial.println(fullID, HEX);
 }
 
 void handleReadAllConfig(uint8_t* config) {
-    Serial.println("Reading Config bits...");
+    Serial.println(F("Reading Config bits..."));
     enterProgramMode();
     size_t count = readAllConfigBytes(config);
-    Serial.print("Number of bytes read: "); 
+    Serial.print(F("Number of bytes read: ")); 
     Serial.println(count);
     if (count > 0) {
         Serial.println("Config bytes:");
@@ -771,7 +768,9 @@ void handleSingleRead(){
   memset(addrBuf, 0, sizeof(addrBuf));
   while(Serial.available() > 0) Serial.read();
   
-  Serial.println("ENTER MEMORY ADDRESS (e.g., 3FFFFE):");
+  Serial.println(F("------------- Single Read ----------"));
+  Serial.println();
+  Serial.println(F("ENTER MEMORY ADDRESS (e.g., 3FFFFE):"));
   
   // Wait for the next input
   while (true) {
@@ -784,19 +783,22 @@ void handleSingleRead(){
 
       Serial.print("Address entered: 0x");
       Serial.println(customAddr, HEX);
-      Serial.flush();
-      
-      enterProgramMode();
-      uint8_t result = readSingleByte(customAddr);
+
+      Serial.print(F("free=")); Serial.println(freeMemory());
+      Serial.print('*');   // MARK A
+      enterProgramMode();     
+      Serial.print('#');   // MARK B
+
+      uint8_t val = readSingleByte(customAddr);
       exitProgramMode();
+      Serial.print(F("free=")); Serial.println(freeMemory());
       
       Serial.print("The value at address 0x");
       Serial.print(customAddr, HEX);
       Serial.print(" = 0x");
-      Serial.println(result, HEX);
+      Serial.println(val, HEX);
       Serial.println("");
-      
-      Serial.flush();
+
       return;
     }
     
@@ -822,7 +824,9 @@ void handleBlockRead(uint8_t* targetBuffer){
   memset(addrBuf, 0, sizeof(addrBuf));
   while(Serial.available() > 0) Serial.read();
 
-  Serial.println("ENTER MEMORY ADDRESS (e.g., 3FFFFE):");
+  Serial.println(F("------------- Block Read ----------"));
+  Serial.println();
+  Serial.println(F("ENTER MEMORY ADDRESS (e.g., 3FFFFE):"));
   
   while (true) {
 
@@ -844,7 +848,6 @@ void handleBlockRead(uint8_t* targetBuffer){
       Serial.print("Reading ");
       Serial.print(bSize, DEC);
       Serial.println(" bytes.");
-      Serial.flush();
       
       // Overflow safety check
       if (bSize > 64) bSize = 64;
@@ -864,8 +867,6 @@ void handleBlockRead(uint8_t* targetBuffer){
         }
         Serial.println(targetBuffer[i], HEX);
       }
-
-      Serial.flush();
       
       return;
     }
@@ -951,34 +952,34 @@ void handleTestErsWrtRd() {
 
 }
 
-void handleManualErase(){
-
-  Serial.println("ENTER MEMORY ADDRESS (e.g., 3FFFFE):");
-  
-  // Wait for the next user input
-  while (Serial.available() == 0) { ; } 
-  
-  String addrStr = Serial.readStringUntil('\n');
-  addrStr.trim();
-  
-  // Convert Hex String to Long Integer
-  uint32_t customAddr = strtoul(addrStr.c_str(), NULL, 16);
-  
-  Serial.print("Attempting to erase address: 0x");
-  Serial.println(customAddr, HEX);
-  
-  enterProgramMode();
-  
-  bulkErase(customAddr);
-  
-  uint8_t result = readSingleByte(customAddr);
-  Serial.print("The value at address 0x");
-  Serial.print(customAddr, HEX);
-  Serial.print(" = 0x");
-  Serial.println(result, HEX);
-  
-  exitProgramMode();
-}
+//void handleManualErase(){
+//
+//  Serial.println("ENTER MEMORY ADDRESS (e.g., 3FFFFE):");
+//  
+//  // Wait for the next user input
+//  while (Serial.available() == 0) { ; } 
+//  
+//  String addrStr = Serial.readStringUntil('\n');
+//  addrStr.trim();
+//  
+//  // Convert Hex String to Long Integer
+//  uint32_t customAddr = strtoul(addrStr.c_str(), NULL, 16);
+//  
+//  Serial.print("Attempting to erase address: 0x");
+//  Serial.println(customAddr, HEX);
+//  
+//  enterProgramMode();
+//  
+//  bulkErase(customAddr);
+//  
+//  uint8_t result = readSingleByte(customAddr);
+//  Serial.print("The value at address 0x");
+//  Serial.print(customAddr, HEX);
+//  Serial.print(" = 0x");
+//  Serial.println(result, HEX);
+//  
+//  exitProgramMode();
+//}
 
 void handleTestOptions (){
     
@@ -1126,11 +1127,25 @@ void writeByte(uint16_t val, uint32_t addr) {
 // only runs once
 void setup() {
 
+  uint8_t mcusr_mirror = MCUSR;
+  MCUSR = 0;  // clear flags
+  lastResetCause = mcusr_mirror;
+
+
   // Establish serial link with PC
   Serial.begin(19200);
   while (!Serial) {
       ;  // wait for serial port to connect. Needed for native USB port only
     }
+
+    
+  Serial.print(F("Reset cause: "));
+  if (mcusr_mirror & _BV(PORF))  Serial.print(F("POR "));
+  if (mcusr_mirror & _BV(EXTRF)) Serial.print(F("EXT "));
+  if (mcusr_mirror & _BV(BORF))  Serial.print(F("BOR "));
+  if (mcusr_mirror & _BV(WDRF))  Serial.print(F("WDT "));
+  Serial.println();
+
 
   // Hold the PIC in the powered down/reset state until we are ready for it.
   digitalWrite(PIN_MCLR, LOW);
@@ -1179,7 +1194,7 @@ void loop() {
         case '6': handleReadDeviceID(); break;
         case '7': handleTestOptions(); break;
         case '8': eraseEverything(); break;
-        case '9': handleManualErase(); break;
+        //case '9': handleManualErase(); break;
         default:
           // Should never reach here because of the range check
           Serial.println(F("Invalid selection."));
