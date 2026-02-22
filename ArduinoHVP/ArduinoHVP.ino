@@ -1,68 +1,10 @@
 #pragma  GCC optimize ("O0")
 uint8_t lastResetCause __attribute__((section(".noinit")));  // survive soft resets
 
-// ------------------- Various memory addresses ----------------
-#define  CONFIG_ADDR          0x300000   // CONFIG register addresses 0x300000..0x30000D
-#define  BULK_ERASE_ADDR1     0x3C0005   // Main memeory erase target
-#define  BULK_ERASE_ADDR2     0x3C0004   // System config erase target    
-#define  CONFIG4L_ADDR        0x300006   // CONFIG4L register address
-#define  CONFIG1L_ADDR        0x300000   // CONFIG1L register address
-#define  CONFIG1H_ADDR        0x300001   // CONFIG1L register address
-#define  USER_ID_ADDR         0x200000   // User ID address used for testing
-#define  EEPROM_ADDR          0xF00000   // Start of EEPROM memory
-#define  EECON1_ADDR          0x000FA6   // Start of EECON1 register
+#include "definitions.h"
 
-// --------------------- Bulk Erase Keys ------------------------
-#define  CONFIG_ERASE_KEY     0x82       // Erase key for configuration bits
-#define  EEPROM_ERASE_KEY     0x84       // Erase key for EEPROM bits
-#define  USER_ID_ERASE_KEY    0x88       // Erase key for User ID bits
-#define  ERASE_ALL_KEY        0x8F       // Erase everything
-
-
-// --------------------- EECON1 Register Instructions -----------
-#define  EEPGD_SET            0x8EA6     // Selects the program/config space for reads/writes
-#define  EEPGD_CLEAR          0x9EA6     // Clears the EEPGD bit 
-#define  CFGS_SET             0x8CA6     // Selects the configuration space
-#define  CFGS_CLEAR           0x9CA6     // Clears the CFGS bit
-#define  WREN_SET             0x84A6     // Enables writes
-#define  WREN_CLEAR           0x94A6     // Disables writes
-#define  WR_SET               0x82A6     // Begins write cycle
-#define  WR_CLEAR             0x92A6     // End write cycle
-
-// --------------------- Known Masks ---------------------------
-#define  CONFIG4L_BIT_MASK    0xC5       // CONFIG4L register bits 5, 4, 3, 1 are unimplemented
-#define  USER_ID_BIT_MASK     0xFF       // all bits are free game
-// add more later
-
-// ------------------- Config Btye Definitions -----------------
-#define  CONFIG_BYTES_TO_READ 14         // The K22 config space exposes 14 bytes at 0x300000..0x30000D.
-
-// ------------------- 4-bit Commands --------------------------
-#define  TBLWRITE_CMD          0x0C        // Table Write 4 bit command (bin 1100)
-#define  TBLWRITE_PI2_CMD      0x0D        // Table Write Post Increment (bin 1101)
-#define  TBLWRITE_START_CMD    0x0F        // Table Write Start Programming (bin 1111)
-#define  TBLWRITE_START_PI_CMD 0x0E        // Table Write Start Programming PI (bin 1110)
-#define  TBLREAD_PI_CMD        0x09        // Table Read Post Increment 4 bit command(bin 1001)
-#define  TBLREAD_CMD           0x08        // Table Read No pre or post inc/dec
-#define  COREINSTR_CMD         0x00        // Core instruction 4 bit command (bin 0000)
-
-// ------------------- Pin mappings ---------------------
-#define  PIN_VDD              2           // PIC18 power supply
-#define  PIN_MCLR             3           // Data direction register for DATA port
-#define  PIN_DATA             4           // PGD = Data = RB6 on PIC
-#define  PIN_CLOCK            5           // PGC = Clk = RB7 on PIC
-
-// All delays are in microseconds.
-#define  DELAY_TPGC_P6        1           // Delay between clock edges
-#define  DELAY_SETTLE         50          // Delay for lines to settle for reset
-#define  DELAY_TPPDP          5           // Hold time after raising MCLR
-#define  DELAY_THLD0          5           // Input Data Hold Time from PGC (P4)
-#define  DELAY_TDLY1          5           // Delay Between 4-Bit Command and Command Operand
-#define  DELAY_TDLY2          5           // Delay Between Last PGC falling edge of Command Byte to First PGC (raising) of Read of Data Word
-
-// ------------------- Literals --------------------------------
-#define  TRUE                 1
-#define  FALSE                0
+// Enable to trace low-level 4-bit commands and 16-bit payloads
+#define CMD_TRACE 0
 
 // -------------- global declarations --------------------------
 //volatile int input=0;
@@ -72,25 +14,9 @@ static uint8_t bBuffer[64];
 extern unsigned int __heap_start;
 extern void *__brkval;
 
-int freeMemory() {
-  int v;
-  return (int)&v - (__brkval == 0 ? (int)&__heap_start : (int)__brkval);
-}
-
-enum MemorySpace { 
-  FLASH_ID, 
-  CONFIG_DEVICE, 
-  UNKNOWN };
-
-enum InputResult {
-  INPUT_IN_PROGRESS,
-  INPUT_COMPLETE,
-  INPUT_TIMEOUT,
-  INPUT_ABORT
-};
-
-
 InputResult readLine(char* buffer, size_t bufferSize, unsigned long timeoutMs);
+
+WrBitState isWrBitClear(uint32_t timeout_us);
 
 InputResult readLine(char* buffer, size_t bufferSize, unsigned long timeoutMs) {
   static size_t index = 0;
@@ -154,20 +80,27 @@ static inline void setClkLow() {
 //Create and send 4 bit opcpde command
 //takes in a byte 'cmd' (i.e 0x00 or 0000 1101)
 void send4Cmd(uint8_t cmd){
-    pinMode(PIN_DATA, OUTPUT);
-    for (uint8_t i = 0; i < 4; ++i) {
-        setClkHigh();
-        digitalWrite(PIN_DATA, (cmd & 1) ? HIGH : LOW);
-        setClkLow();
-        cmd >>= 1;
-    }
-    digitalWrite(PIN_DATA, LOW);
-    delayMicroseconds(50); // delay to differeniate between opcode and payload
+  uint8_t cmd_val = cmd & 0x0F;
+#if CMD_TRACE
+  Serial.print("send4Cmd: 0x"); Serial.println(cmd_val, HEX);
+#endif
+  pinMode(PIN_DATA, OUTPUT);
+  for (uint8_t i = 0; i < 4; ++i) {
+    setClkHigh();
+    digitalWrite(PIN_DATA, (cmd & 1) ? HIGH : LOW);
+    setClkLow();
+    cmd >>= 1;
+  }
+  digitalWrite(PIN_DATA, LOW);
+  delayMicroseconds(50); // delay to differeniate between opcode and payload
 }
 
 //Create and send 16 bit operand payload
 //takes in a two byte payload (i.e 0x0000)
 void send16Payload(uint16_t payload){
+#if CMD_TRACE
+  Serial.print("send16Payload: 0x"); Serial.println(payload, HEX);
+#endif
     for (uint8_t i = 0; i < 16; ++i) {
         setClkHigh();
         if ((payload >> i) & 0x01) {
@@ -251,22 +184,60 @@ void cfgEECON1Bits (uint32_t addr) {
 
     if (addr >= EEPROM_ADDR) {
         sendCoreInstr(EEPGD_CLEAR);
-        sendCoreInstr(CFGS_CLEAR); 
+        sendCoreInstr(CFGS_CLEAR);
+        Serial.println(F("EEPROM_ADDR SPACE"));
+        Serial.println(F("EEPGD_CLEAR"));
+        Serial.println(F("CFGS_CLEAR"));
     } 
     else if (addr >= CONFIG_ADDR){
         sendCoreInstr(EEPGD_SET);
         sendCoreInstr(CFGS_SET);
+        Serial.println(F("CONFIG_ADDR SPACE"));
+        Serial.println(F("EEPGD_SET"));
+        Serial.println(F("EEPGD_SET"));
     }
     else if (addr >= USER_ID_ADDR) {
         sendCoreInstr(EEPGD_SET);
         sendCoreInstr(CFGS_CLEAR);
+        Serial.println(F("USER_ID_ADDR SPACE")); 
+        Serial.println(F("EEPGD_SET"));
+        Serial.println(F("CFGS_CLEAR"));
     } 
     else {
         sendCoreInstr(EEPGD_SET);
         sendCoreInstr(CFGS_CLEAR);
+        Serial.println(F("FLASH SPACE")); 
+        Serial.println(F("EEPGD_SET"));
+        Serial.println(F("CFGS_CLEAR"));
     }
 
     sendCoreInstr(WREN_SET); // enable writes
+
+    Serial.println("");
+}
+
+// Polls WR bit
+WrBitState isWrBitClear(uint32_t timeout_us){
+
+  uint32_t t0 = micros();
+  
+  while (true) {
+    sendCoreInstr(0x50A6); // MOVF EECON1, W, 0
+    sendCoreInstr(0x6EF5); // MOVWF TABLAT
+    sendCoreInstr(0x0000);
+    
+    // Read EECON1 register
+    uint8_t eecon1Val = tblRead(TABLAT_SHIFT_OUT);
+    Serial.print("EECON1=0x"); 
+    Serial.println(eecon1Val, HEX);
+    if ((eecon1Val & 0x02) == 0){ // Check the WR bit
+      return WR_BIT_CLEAR;
+    }
+    
+    if ((uint32_t)(micros() - t0) > timeout_us) {
+      return WR_BIT_TIMEOUT; // timed out
+    }
+  }
 }
 
 // Send a Table Write 4-bit 'cmd' plus operand clocks
@@ -326,29 +297,50 @@ static void setTBLPTR(uint32_t addr) {
 
   sendCoreInstr(0x0E00 | L);  // Core instruction MOVLW L and Bitwise OR 0E and L 
   sendCoreInstr(0x6EF6);      // Core instruction MOVWF TBLPTRL - Move to TBLPRTL
+#if CMD_TRACE
+  Serial.print("setTBLPTR: 0x"); Serial.println(addr, HEX);
+#endif
 }
 
-// Reads data in TBLPTR and returns the result in b
-// Takes in a 'cmd' (i.e TBLRD*, TBLRD*+, etc)
-static uint8_t tblRead(uint8_t cmd) {
-  
-  send4Cmd(cmd);
-  send8OperandZero();
+// Help for reading data while performing table reads or shift outs
+static uint8_t readData(){
+
+  uint8_t b = 0;
 
   // Turn PIN_DATA into input before the last 8 clocks to sample data (LSB->MSB)
   // And allow Arduino time to switch to INPUT before reading
   pinMode(PIN_DATA, INPUT);
-  delayMicroseconds(100); 
-
-  uint8_t b = 0;
+  delayMicroseconds(5); 
+  
   for (uint8_t i = 0; i < 8; ++i) { 
     setClkHigh();
-    delayMicroseconds(15); // Give the PIC time to drive the line HIGH/LOW
+    delayMicroseconds(5); // Give the PIC time to drive the line HIGH/LOW
     setClkLow();
-    delayMicroseconds(30); // Stability delay
+    delayMicroseconds(5); // Stability delay
     if (digitalRead(PIN_DATA)){ //if HIGH, set corresponding bit in b
       b |= (1u << i);
     }
+  }
+  return b;
+}
+
+// Reads data from holding register and returns the result in b
+// Takes in a 'cmd' (i.e TBLRD*, TBLRD*+, etc)
+static uint8_t tblRead(uint8_t cmd) {
+
+  uint8_t data;
+  
+  send4Cmd(cmd);
+
+  // TABLAT shift out cmd reads data first, then zeros after
+  // All other reads work opposite way
+  if (cmd == TABLAT_SHIFT_OUT){
+    data = readData();
+    send8OperandZero();
+  }
+  else {
+    send8OperandZero();
+    data = readData();
   }
 
   // Reset Data line
@@ -358,7 +350,7 @@ static uint8_t tblRead(uint8_t cmd) {
   // Add 0.5 ms delay before next command for easier debugging
   delayMicroseconds(50);  // 0.5
   
-  return b;
+  return data;
 }
 
 int i;
@@ -700,7 +692,7 @@ void handleEnableLVP(){
     Serial.println(cfg4L, HEX);
 
     // Write new value back to CONFIG4L register
-    writeByte(CONFIG4L_ADDR, cfg4L);
+    //writeByte(CONFIG4L_ADDR, cfg4L);
 
     //verifyWrite(CONFIG4L_ADDR, cfg4L, CONFIG4L_BIT_MASK);
 
@@ -768,9 +760,10 @@ void handleSingleRead(){
   memset(addrBuf, 0, sizeof(addrBuf));
   while(Serial.available() > 0) Serial.read();
   
-  Serial.println(F("------------- Single Read ----------"));
+  Serial.println(F("------------- Single Byte Read ----------"));
   Serial.println();
   Serial.println(F("ENTER MEMORY ADDRESS (e.g., 3FFFFE):"));
+  Serial.println();
   
   // Wait for the next input
   while (true) {
@@ -783,15 +776,10 @@ void handleSingleRead(){
 
       Serial.print("Address entered: 0x");
       Serial.println(customAddr, HEX);
-
-      Serial.print(F("free=")); Serial.println(freeMemory());
-      Serial.print('*');   // MARK A
+      
       enterProgramMode();     
-      Serial.print('#');   // MARK B
-
       uint8_t val = readSingleByte(customAddr);
       exitProgramMode();
-      Serial.print(F("free=")); Serial.println(freeMemory());
       
       Serial.print("The value at address 0x");
       Serial.print(customAddr, HEX);
@@ -827,6 +815,7 @@ void handleBlockRead(uint8_t* targetBuffer){
   Serial.println(F("------------- Block Read ----------"));
   Serial.println();
   Serial.println(F("ENTER MEMORY ADDRESS (e.g., 3FFFFE):"));
+  Serial.println();
   
   while (true) {
 
@@ -848,6 +837,7 @@ void handleBlockRead(uint8_t* targetBuffer){
       Serial.print("Reading ");
       Serial.print(bSize, DEC);
       Serial.println(" bytes.");
+      Serial.println();
       
       // Overflow safety check
       if (bSize > 64) bSize = 64;
@@ -867,6 +857,7 @@ void handleBlockRead(uint8_t* targetBuffer){
         }
         Serial.println(targetBuffer[i], HEX);
       }
+      Serial.println();
       
       return;
     }
@@ -885,8 +876,21 @@ void handleBlockRead(uint8_t* targetBuffer){
   }
 }
 
-void handleManualWrite(){
-  Serial.println("ENTER MEMORY ADDRESS (e.g., 3FFFFE):");
+// Modifies code memory by taking in a address and value
+// and replacing existing value at that address with
+// new value. This reads existing block into a buffer first,
+// then erases that block, then writes that block with updated
+// values. Finally, it verifies the write was successfully by
+// reading back values and comparing. 
+// ** ONLY works for one byte and one address at a time **
+void handleModMemory(){
+
+  uint16_t blockSize = 0; // Default for EEPROM/Config
+  uint32_t blockStart = 0;
+  
+  Serial.println(F("------------- Modify Code Memory ----------"));
+  Serial.println();
+  Serial.println("ENTER MEMORY ADDRESS TO MODIFY (e.g., 3FFFFE):");
   
   // Wait for the next input
   while (Serial.available() == 0) { ; } 
@@ -899,10 +903,11 @@ void handleManualWrite(){
 
   Serial.print("You entered an address of 0x");
   Serial.println(customAddr, HEX);
+  Serial.println();
 
   while (Serial.available() > 0) { Serial.read(); } // clear serial
   
-  Serial.println("ENTER 2-BYTE VALUE (e.g., 566B or 0ABC):");
+  Serial.println("ENTER 1-BYTE VALUE (e.g., 56 or 0C):");
 
   while (Serial.available() == 0) { ; } // wait for input
 
@@ -910,24 +915,113 @@ void handleManualWrite(){
   valStr.trim();
   
   // Convert Hex String to Long Integer
-  uint16_t customVal = strtoul(valStr.c_str(), NULL, 16); 
+  uint8_t customVal = strtoul(valStr.c_str(), NULL, 16); 
   
   Serial.print("You entered a value of 0x");
   Serial.println(customVal, HEX);
-  
-  enterProgramMode();
-  
-  writeByte(customVal, customAddr);  
+  Serial.println();
 
-  uint8_t result = readSingleByte(customAddr); // reads test address
-  if (result == customVal){
-    Serial.println("Write Sucessfull!");
+  blockSize = getBlockSize(customAddr);
+  blockStart = getBlockStart(customAddr);
+
+  Serial.print(F("Block starts at 0x"));
+  Serial.println(blockStart, HEX);
+  Serial.print(F("Block size = "));
+  Serial.println(blockSize, DEC);
+  Serial.println();
+
+  Serial.print(F("Writing..."));
+  Serial.println();
+
+  enterProgramMode();
+
+  // Tell uC where we are working and enable writes
+  Serial.println(F("Setting write location..."));
+  cfgEECON1Bits(customAddr);
+  delayMicroseconds(100);
+
+  // Read Code Memory block into buffer
+   uint8_t buffer[64]; // Max size needed for Flash
+
+  Serial.println(F("Reading current block..."));
+  for (uint16_t i = 0; i < blockSize; i++) {
+    buffer[i] = readSingleByte(blockStart + i);
   }
-  else {
-    Serial.println("Write failed!");
+
+  // Change value of the target addr in the buffer to customVal
+  buffer[customAddr - blockStart] = (uint8_t)customVal;
+  Serial.println(F("Storing modified byte in buffer..."));
+  
+  // Set TBLPTR for block to be erased
+  Serial.println(F("Targeting block to erase..."));
+  setTBLPTR(blockStart);
+
+  // Initiate Erase
+  Serial.println(F("Beginning block erase..."));
+  sendCoreInstr(FREE_SET);
+  sendCoreInstr(WR_SET);
+  sendCoreInstr(0x0000);
+  sendCoreInstr(0x0000);
+
+  pinMode(PIN_DATA, OUTPUT);
+  digitalWrite(PIN_DATA, LOW);
+
+  // Poll WR bit
+  if (isWrBitClear(WR_POLL_TIMEOUT) != WR_BIT_CLEAR) {
+    Serial.println(F("WR Bit did not clear. Aborting operation"));
+    goto cleanup;
+  }
+  Serial.println(F("WR bit clear"));
+
+  Serial.println(F("Targeting write location..."));
+  setTBLPTR(blockStart); // TBLPTR to blockStart
+
+  // Write the block, repeat for block size
+  Serial.println(F("Writing to the block..."));
+  for (uint16_t i = 0; i < blockSize - 2; i += 2) { 
+    uint8_t lo_byte = buffer[i];
+    uint8_t hi_byte = buffer[i+1];
+    uint16_t finalWord = ((uint16_t)hi_byte << 8) | lo_byte;
+
+    send4Cmd(TBLWRITE_PI2_CMD); // Write the two bytes
+    send16Payload(finalWord);
   }
   
-  exitProgramMode();
+  // Fill last byte and start programming
+  send4Cmd(TBLWRITE_START_CMD);
+  send16Payload(0x7777); 
+
+  // NOP - hold PGC high for time P9 and low for time P10.
+  send4Cmd(0x0000); 
+  send16Payload(0x0000);
+
+  setTBLPTR(blockStart); 
+
+  sendCoreInstr(WR_SET); // BSF EECON1, WR
+
+  pinMode(PIN_DATA, OUTPUT);
+  digitalWrite(PIN_DATA, LOW);
+
+  // Check WR bit again while it writes
+  Serial.println(F("Polling WR bit again..."));
+  if (isWrBitClear(WR_POLL_TIMEOUT) != WR_BIT_CLEAR) {
+    Serial.println(F("WR Bit did not clear. Aborting operation"));
+    goto cleanup;
+  }
+
+  // Clear bits for next operation
+  Serial.println(F("Clearing setup bits for next time..."));
+  sendCoreInstr(WREN_CLEAR); 
+  setTBLPTR(EECON1_ADDR);   
+  sendCoreInstr(EEPGD_CLEAR);
+  sendCoreInstr(CFGS_CLEAR); 
+
+  
+  cleanup:
+    sendCoreInstr(WREN_CLEAR);  // BCF EECON1,WREN
+    exitProgramMode();
+    
+  Serial.println("Write sequence complete.");
   
 }
 
@@ -939,7 +1033,7 @@ void handleTestErsWrtRd() {
   Serial.println("Testing Erase, Write, and Read");
   enterProgramMode();
   //bulkErase(testAddr); // erases test address
-  writeByte(testVal, testAddr); // Writes value to test address
+  //writeByte(testVal, testAddr); // Writes value to test address
   uint8_t result = readSingleByte(testAddr); // reads test address
   if (result == testVal){
     Serial.println("Write Sucessfull!");
@@ -1009,120 +1103,33 @@ void handleTestOptions (){
   }
 }
 
-// To write, we must read the whole block first
-// then modify the byte we care about
-void writeByte(uint16_t val, uint32_t addr) {
+// Simple table Write
+void tblWrite(uint8_t val){
   
-  uint16_t blockSize = 1; // Default for EEPROM/Config
-  uint32_t blockStart = addr;
-
-  // Determine memory region and Block Size for writing
-  if (addr < USER_ID_ADDR) {
-    blockSize = 64; // Program Flash block size
-    blockStart = addr & 0xFFFFC0; // Align to 64-byte boundary
-  } 
-  else if (addr >= USER_ID_ADDR && addr < CONFIG_ADDR) {
-    blockSize = 8;  // User ID block size
-    blockStart = addr & 0xFFFFF8; // Align to 8-byte boundary
-  }
-  else if (addr >= CONFIG_ADDR && addr < (CONFIG_ADDR + 0x0F)) {
-    blockSize = 2;  // Config bits are usually word-paired
-    blockStart = addr & 0xFFFFFE;
-  }
-   // EEPROM (0xF00000) is truly 1-byte; blockSize remains 1
+  // Load value into TABLAT (MOVLW val; MOVWF TABLAT)
+  send4Cmd(COREINSTR_CMD);           // 0000
+  send16Payload(0x0E00 | val);       // MOVLW val
   
-//  Serial.print("Writing to ");
-//  Serial.print(addr, HEX);
-//  Serial.print(" (Block Start: ");
-//  Serial.print(blockStart, HEX);
-//  Serial.println(")");
-//  
-//  uint8_t buffer[64]; // Max size needed for Flash
-//  
-//  // Read block into buffer
-//  for (uint16_t i = 0; i < blockSize; i++) {
-//    buffer[i] = readSingleByte(blockStart + i);
-//    }
-//
-//  // Change value of the target addr in the buffer
-//  buffer[addr - blockStart] = (uint8_t)val;
-
-  cfgEECON1Bits(addr); // configure EECON1 bits
-  delayMicroseconds(100);
-
-  setTBLPTR(blockStart);
-
-  // Loop through block, writing as you go,
-  // Example: if block is 8 bytes, loop and 2PI 4 times
-  // so we don't travel into next block
-  // E.g. 0x200000 w/ 4 loops = targetAddr of 0,2,4,6 with
-  // last TBLWT*+ getting us to write on 0x200006..07
-  for (uint16_t i = 0; i < (blockSize - 2); i += 2) {
-    send4Cmd(TBLWRITE_PI2_CMD); 
-    send16Payload(val);
-  }
+  send4Cmd(COREINSTR_CMD);           // 0000
+  send16Payload(0x6EF5);             // MOVWF TABLAT (TABLAT = 0xFF5 -> 0xF5 in access)
   
-  // Fill last byte and start programming
-  send4Cmd(TBLWRITE_START_CMD); 
-  send16Payload(val);
-
-  // NOP - hold PGC high for time P9 and low for time P10.
-  send4Cmd(0x0000); 
-  send16Payload(0x0000);
-
-  setTBLPTR(blockStart);
-
-  // Hardware Unlock Sequence (Required to set the WR bit)
-  //hwUnlock();
-
-  // Trigger the actual Write
-  sendCoreInstr(WR_SET); // BSF EECON1, WR
-
-  pinMode(PIN_DATA, OUTPUT);
-  digitalWrite(PIN_DATA, LOW);
-
-  // Keep the clock moving for the duration of the write
-  for(int i = 0; i < 5000; i++) {
-    setClkHigh();
-    delayMicroseconds(1);
-    setClkLow();
-    delayMicroseconds(1);
-  }
+  // Keep driving the DATA line for a short period to ensure the target
+  // has time to update its TABLAT register before we sample it.
   
-  delay(100);
-  
-  // Clear bits for next operation
-  sendCoreInstr(WREN_CLEAR); 
-  setTBLPTR(EECON1_ADDR);   
-  sendCoreInstr(EEPGD_CLEAR);
-  sendCoreInstr(CFGS_CLEAR); 
-
-  Serial.println("Write sequence complete.");
+#if CMD_TRACE
+  Serial.print("tblWrite: 0x"); Serial.println(val, HEX);
+#endif
+  delayMicroseconds(500);
 }
 
-//static simpleReadBack(uint32_t addr) {
-//  
-//  setTBLPTR(addr);
-//  sendCoreInstr(0x8EA6); // BSF EECON1, EEPGD
-//  
-//  if (addr >= 0x300000) {
-//      sendCoreInstr(0x8CA6); 
-//  } else {
-//      sendCoreInstr(0x9CA6); 
-//  }
-//
-//  // Command 0x08 is "Table Read" (No increment)
-//  uint8_t result = tblRead(0x08); 
-//
-//  // Print to terminal
-//  Serial.println("Verifying write...");
-//  Serial.print("New value at 0x");
-//  Serial.print(addr, HEX);
-//  Serial.print(" = 0x");
-//  Serial.println(result, HEX);
-//
-//  return result;
-//}
+void writeWord(uint16_t val, uint32_t addr) {
+
+  setTBLPTR(addr);
+
+  // Write/fill value (size: Word) to TBLPTR
+  send4Cmd(TBLWRITE_PI2_CMD); 
+  send16Payload(val);
+}
 
 // only runs once
 void setup() {
@@ -1190,7 +1197,7 @@ void loop() {
         case '2': handleReadAllConfig(config); break;
         case '3': handleEnableLVP(); break;
         case '4': handleManualRead(); break;
-        case '5': handleManualWrite(); break;
+        case '5': handleModMemory(); break;
         case '6': handleReadDeviceID(); break;
         case '7': handleTestOptions(); break;
         case '8': eraseEverything(); break;
