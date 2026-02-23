@@ -887,6 +887,7 @@ void handleModMemory(){
 
   uint16_t blockSize = 0; // Default for EEPROM/Config
   uint32_t blockStart = 0;
+  uint32_t blockEnd = 0;
   
   Serial.println(F("------------- Modify Code Memory ----------"));
   Serial.println();
@@ -921,11 +922,14 @@ void handleModMemory(){
   Serial.println(customVal, HEX);
   Serial.println();
 
-  blockSize = getBlockSize(customAddr);
-  blockStart = getBlockStart(customAddr);
+  blockSize   = getBlockSize(customAddr);
+  blockStart  = getBlockStart(customAddr);
+  blockEnd    = (blockStart + blockSize) - 1; 
 
   Serial.print(F("Block starts at 0x"));
   Serial.println(blockStart, HEX);
+  Serial.print(F("Block ends at 0x"));
+  Serial.println(blockEnd, HEX);
   Serial.print(F("Block size = "));
   Serial.println(blockSize, DEC);
   Serial.println();
@@ -987,9 +991,9 @@ void handleModMemory(){
     send16Payload(finalWord);
   }
   
-  // Fill last byte and start programming
+  // Fill last Word and start programming
   send4Cmd(TBLWRITE_START_CMD);
-  send16Payload(0x7777); 
+  send16Payload(buffer[blockEnd]); 
 
   // NOP - hold PGC high for time P9 and low for time P10.
   send4Cmd(0x0000); 
